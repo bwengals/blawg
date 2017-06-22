@@ -1,0 +1,5 @@
+output/*
+content/.ipynb_checkpoints/*
+content/gp-speedup/.ipynb_checkpoints/*
+__pycache__/*
+.gitignore
