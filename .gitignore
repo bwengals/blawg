@@ -1,4 +1,5 @@
 output/*
+bwengals.github.io/*
 content/.ipynb_checkpoints/*
 content/gp-speedup/.ipynb_checkpoints/*
 __pycache__/*
