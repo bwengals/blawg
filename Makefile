@@ -103,11 +103,6 @@ publish:
 
 done:
 	$(PELICAN) $(INPUTDIR) -o $(GITHUBDIR) -s $(PUBLISHCONF) $(PELICANOPTS)
-	cd $(GITHUBDIR)
-	git add .
-	git commit -m "update"
-	git push
-	cd $(BASEDIR)
 
 ssh_upload: publish
 	scp -P $(SSH_PORT) -r $(OUTPUTDIR)/* $(SSH_USER)@$(SSH_HOST):$(SSH_TARGET_DIR)
