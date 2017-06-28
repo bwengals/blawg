@@ -21,7 +21,7 @@ AUTHOR_FEED_ATOM = None
 AUTHOR_FEED_RSS = None
 
 # Blogroll
-#LINKS = (('Pelican', 'http://getpelican.com/'),
+LINKS = (('Github', 'https://github.com/bwengals'),)
 #         ('Python.org', 'http://python.org/'),
 #         ('Jinja2', 'http://jinja.pocoo.org/'),
 #         ('You can modify those links in your config file', '#'),)
@@ -40,3 +40,5 @@ MARKUP = ('md', 'ipynb')
 PLUGIN_PATHS = ['./plugins']
 PLUGINS = ['ipynb.markup']
 
+IPYNB_USE_META_SUMMARY = True
+IGNORE_FILES = ['.ipynb_checkpoints']
