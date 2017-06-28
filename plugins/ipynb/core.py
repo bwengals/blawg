@@ -88,7 +88,6 @@ def get_html_from_filepath(filepath, start=0, end=None):
     exporter = HTMLExporter(config=config, template_file='nocount.tpl',
                             filters={'highlight2html': custom_highlighter},
                             preprocessors=[SubCell])
-    print("!!!!!!!!!!!", exporter.template_path)
     content, info = exporter.from_filename(filepath)
 
     if BeautifulSoup:
