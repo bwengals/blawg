@@ -1,0 +1,7 @@
+Title:  GPs with non-Normal likelihoods in PyMC3
+Slug: non-conjugate GPs
+Date: 2017-06-28 00:34
+Category: posts
+Tags: gp, non-conjugate, gsoc
+Author: me
+Summary: Demo of GP's with non-Normal likelihoods
