@@ -1,6 +1,7 @@
 output/*
-bwengals.github.io/*
+bwengals.github.io
 content/.ipynb_checkpoints/*
 content/gp-speedup/.ipynb_checkpoints/*
+content/fitc-vfe/.ipynb_checkpoints/*
 __pycache__/*
 .gitignore

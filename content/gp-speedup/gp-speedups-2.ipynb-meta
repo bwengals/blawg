@@ -1,7 +1,0 @@
-Title:  Speeding up GPs with special kernel matrix structure
-Slug: gp-speedups-2
-Date: 2017-05-29 10:52
-Category: posts
-Tags: gaussian-process, kronecker, toeplitz, hodlr, gsoc
-Author: me
-Summary: Linear algebra tricks to speed up GPs

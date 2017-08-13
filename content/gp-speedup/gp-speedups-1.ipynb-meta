@@ -1,7 +1,0 @@
-Title:  Gaussian processes in PyMC3
-Slug: gp-speedups-1
-Date: 2017-05-28 20:52
-Category: posts
-Tags: gaussian-process, gsoc
-Author: me
-Summary: Introduction to Gaussian Process.  The math and computational holdups.

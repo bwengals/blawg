@@ -1,9 +1,10 @@
 
-I used this link with instructions to make
+Things to remember when putting new post up:
+- have a header in the notebook
+- run: jupyter nbconvert --to markdown nonconj.ipynb --NbConvertApp.output_files_dir=images/{notebook_name}_files
+- if using bokeh, remove indents at bokeh plots in the markdown
+- if doesnt render, open nonconj.md and remove top blank line
 
-https://fedoramagazine.org/make-github-pages-blog-with-pelican/
 
-https://www.dataquest.io/blog/how-to-setup-a-data-science-blog/
-
-
-
+How to deal with bokeh
+http://pmbaumgartner.github.io/some-tips-for-using-jupyter-notebooks-with-pelican.html

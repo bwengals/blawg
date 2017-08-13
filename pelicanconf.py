@@ -5,7 +5,9 @@ from __future__ import unicode_literals
 AUTHOR = 'Bill Engels'
 SITENAME = 'Bill Engels'
 SITEURL = ''
-THEME = "/home/bill/Documents/pelican-themes/nikhil-theme"
+THEME = "theme"
+
+ABOUT_PAGE = '/pages/about.html'
 
 PATH = 'content'
 
@@ -20,6 +22,17 @@ TRANSLATION_FEED_ATOM = None
 AUTHOR_FEED_ATOM = None
 AUTHOR_FEED_RSS = None
 
+#ARTICLE_URL = 'blog/{date:%Y}/{date:%m}/{date:%d}/{slug}/'
+#ARTICLE_SAVE_AS = 'blog/{date:%Y}/{date:%m}/{date:%d}/{slug}/index.html'
+
+
+MARKUP = ['md']
+IGNORE_FILES = ['.ipynb_checkpoints']
+
+PLUGIN_PATHS = ['./pelican-plugins/']
+PLUGINS = ["render_math", "summary"]
+SUMMARY_MAX_LENGTH = 20
+
 # Blogroll
 LINKS = (('Github', 'https://github.com/bwengals'),)
 #         ('Python.org', 'http://python.org/'),
@@ -30,15 +43,16 @@ LINKS = (('Github', 'https://github.com/bwengals'),)
 #SOCIAL = (('You can add links in your config file', '#'),
 #          ('Another social link', '#'),)
 
-DEFAULT_PAGINATION = 10
+DEFAULT_PAGINATION = False
 
 # Uncomment following line if you want document-relative URLs when developing
-#RELATIVE_URLS = True
+RELATIVE_URLS = True
+STATIC_PATHS = ['images']
 
-MARKUP = ('md', 'ipynb')
-
-PLUGIN_PATHS = ['./plugins']
-PLUGINS = ['ipynb.markup']
-
-IPYNB_USE_META_SUMMARY = True
-IGNORE_FILES = ['.ipynb_checkpoints']
+MARKDOWN = {
+    'extension_configs': {
+        'markdown.extensions.codehilite': {'guess_lang': False,
+                                           'css_class': 'highlight'},
+        'markdown.extensions.extra': {},
+    },
+}
