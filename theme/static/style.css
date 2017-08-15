@@ -1,10 +1,10 @@
 @import url(https://fonts.googleapis.com/css?family=Libre+Baskerville:400,700,400italic,700italic,300,300italic&subset=latin,latin-ext);
 
 code, kbd, pre, samp {
-    background-color: #fbfbfb;
-    border: 0px solid #DEDEDE;
-    border-radius: 0px;
-    font-size: 0.9rem;
+    background-color: rgba(66, 139, 202, 0.06);
+    border: 1px solid rgba(15, 28, 177, 0.05);
+    border-radius: 1px;
+    font-size: 1.1rem;
     font-family: "Hack", monospace;
 }
 

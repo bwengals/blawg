@@ -1,27 +1,28 @@
-Title: Using GPs in PyMC3 to model the Keeing Curve
+Title: Looking at the Keeling Curve with GPs in PyMC3
 Date: 8/12/2017
 Category: posts
 Tags: demo, gp, gsoc
 BokehCSS: https://cdn.pydata.org/bokeh/release/bokeh-0.12.6.min.css
 BokehJS: https://cdn.pydata.org/bokeh/release/bokeh-0.12.6.min.js
-
+<!-- PELICAN_BEGIN_SUMMARY -->
 This post discusses modeling the CO2 measurments at Mauna Loa using Gaussian processes in PyMC3.
 <!-- PELICAN_END_SUMMARY -->
 
+**The code for this is being developed and isn't merged into PyMC3 master yet**
 
 ## The Keeling Curve
 
 In the late 1950's Charles Keeling invented a accurate way to measure atmospheric CO$_2$ concentration and began taking regular measurements at the Mauna Loa observatory.  Today, measurements are continuously recorded.  Check out last hours measurement result [here](https://www.co2.earth/daily-co2).  
 
-![Mauna Loa observatory](https://media.npr.org/assets/img/2013/05/08/mauna-loa-observatory_wide-38711aea834e72dcfc44eb93d7e2c184e88d361d.jpg?s=1400)
+![Mauna Loa observatory](http://sites.gsu.edu/geog1112/files/2014/07/MaunaLoaObservatory_small-2g29jvt.png)
 
 Not much was known about how fossil fuel burning influences the climate in the late 1950s.  The first couple years of data collection showed that CO$_2$ levels rose and fell following summer and winter, tracking the growth and decay of vegetation in the northern hemisphere.  As multiple years passed, the steady upward trend increasingly grew into focus.  With over 70 years of collected data, the Keeling curve is one of the most important climate indicators.
 
 The history behind these measurements and their influence on climatology today and other interesting reading:
 
-- [Some history](http://scrippsco2.ucsd.edu/history_legacy/early_keeling_curve#)
-- [Influences on atmospheric CO2](https://scripps.ucsd.edu/programs/keelingcurve/2016/05/23/why-has-a-drop-in-global-co2-emissions-not-caused-co2-levels-in-the-atmosphere-to-stabilize/)
-- [Lots of data here](http://cdiac.ornl.gov/)
+- http://scrippsco2.ucsd.edu/history_legacy/early_keeling_curve#
+- https://scripps.ucsd.edu/programs/keelingcurve/2016/05/23/why-has-a-drop-in-global-co2-emissions-not-caused-co2-levels-in-the-atmosphere-to-stabilize/#more-1412
+- http://cdiac.ornl.gov/
 
 Let's load in the data, tidy it up, and have a look.  The [raw data set is located here](http://scrippsco2.ucsd.edu/data/atmospheric_co2/mlo).  This notebook uses the [Bokeh package](http://bokeh.pydata.org/en/latest/) for plots that benefit from interactivity.
 
@@ -29,10 +30,6 @@ Let's load in the data, tidy it up, and have a look.  The [raw data set is locat
 
 
 ```python
-import sys
-sys.path.insert(0, "/home/bill/pymc3/")
-import pymc3 as pm
-
 import matplotlib.pyplot as plt
 %matplotlib inline
 
@@ -224,13 +221,6 @@ show(p)
     <a href="http://bokeh.pydata.org" target="_blank" class="bk-logo bk-logo-small bk-logo-notebook"></a>
     <span id="4a48becf-23ad-409f-a122-41c1f7f716ae">Loading BokehJS ...</span>
 </div>
-
-
-
-
-
-
-
 <div class="bk-root">
     <div class="bk-plotdiv" id="2737a390-05a5-496a-b013-bc8bc8b0e9bc"></div>
 </div>
@@ -505,13 +495,6 @@ show(p)
     <a href="http://bokeh.pydata.org" target="_blank" class="bk-logo bk-logo-small bk-logo-notebook"></a>
     <span id="417fa032-b3df-4239-b52d-a60c6b51ae6a">Loading BokehJS ...</span>
 </div>
-
-
-
-
-
-
-
 <div class="bk-root">
     <div class="bk-plotdiv" id="07cacddb-c383-4642-acd9-7fe3f36946cb"></div>
 </div>
@@ -705,13 +688,6 @@ show(p)
     <a href="http://bokeh.pydata.org" target="_blank" class="bk-logo bk-logo-small bk-logo-notebook"></a>
     <span id="73da7c44-12a2-49b8-bc6c-d5c98f6a582d">Loading BokehJS ...</span>
 </div>
-
-
-
-
-
-
-
 <div class="bk-root">
     <div class="bk-plotdiv" id="865eb1ab-6923-47ad-8e93-20a69e6c0f44"></div>
 </div>
