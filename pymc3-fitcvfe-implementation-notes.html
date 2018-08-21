@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+  
+
+    <meta name="tags" content="gp" />
+    <meta name="tags" content="gsoc" />
+    <meta name="tags" content="gp-approximations" />
+
+    <title>PyMC3 FITC/VFE implementation notes - posts</title>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <link href="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="//maxcdn.bootstrapcdn.com/font-awesome/4.2.0/css/font-awesome.min.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/style.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/notebooks.css" rel="stylesheet" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+  <body id="index" class="archive">
+    <!--[if lt IE 7]>
+        <p class="browsehappy">You are using an <strong>outdated</strong> browser. Please <a href="http://browsehappy.com/">upgrade your browser</a> to improve your experience.</p>
+    <![endif]-->
+    <nav class="navbar navbar-default" role="navigation">
+      <div class="container">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target=".navbar-collapse">
+          <span class="sr-only">Toggle navigation</span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          </button>
+          <a class="navbar-brand" href="https://bwengals.github.io">Bill Engels</a>
+        </div>
+        <div class="collapse navbar-collapse navbar-right">
+          <ul class="nav navbar-nav">
+            <li><a href="https://bwengals.github.io/tags.html">tags</a></li>
+          </ul>
+        </div>
+        <!-- /.navbar-collapse -->
+      </div>
+    </nav>
+    <div class="container">
+    <section id="content" class="body">
+      <header>
+        <h1 class="entry-title">
+          PyMC3 FITC/VFE implementation notes
+        </h1>
+        
+        <div class="text-muted">Thu 29 June 2017</div>
+      </header>
+<!-- .entry-content -->
+      <div class="article_content">
+        <p>This post shows in detail how FITC and VFE is implemented in PyMC3.</p>
+
+
+<p>I followed <a href="http://gpflow.readthedocs.io/en/latest/notebooks/SGPR_notes.html">this</a> pretty closely.  It can't be used exactly, since I made changes to incorporate FITC.  Hopefully this is useful for anyone (or me later when I find inevitable bugs) who needs to go over the PyMC3 implementation in detail. </p>
+<div class="math">$$
+\newcommand{tr}[1]{\mathrm{tr}#1}
+\newcommand{diag}[1]{\mathrm{diag}#1}
+\newcommand{Qff}{\mathbf{Q}_{ff}}
+\newcommand{Lam}{\boldsymbol\Lambda}
+\newcommand{Lami}{\boldsymbol\Lambda^{-1}}
+\newcommand{sn}{\sigma^2_n}
+\newcommand{Kff}{\mathbf{K}_{ff}}
+\newcommand{Kuu}{\mathbf{K}_{uu}}
+\newcommand{Kuui}{\mathbf{K}^{-1}_{uu}}
+\newcommand{Kuf}{\mathbf{K}_{uf}}
+\newcommand{Kfu}{\mathbf{K}_{fu}}
+\newcommand{G}{\mathbf{G}}
+\newcommand{A}{\mathbf{A}}
+\newcommand{Ai}{\mathbf{A}^{-1}}
+\newcommand{At}{\mathbf{A}^{\mathrm{T}}}
+\newcommand{B}{\mathbf{B}}
+\newcommand{Bi}{\mathbf{B}^{-1}}
+\newcommand{C}{\mathbf{C}}
+\newcommand{Ct}{\mathbf{C}^{\mathrm{T}}}
+\newcommand{I}{\mathbf{I}}
+\newcommand{W}{\mathbf{W}}
+\newcommand{U}{\mathbf{U}}
+\newcommand{V}{\mathbf{V}}
+\newcommand{Vt}{\mathbf{V}^{\mathrm{T}}}
+\newcommand{Wi}{\mathbf{W}^{-1}}
+\newcommand{T}{\mathbf{T}}
+\newcommand{y}{\mathbf{y}}
+\newcommand{c}{\mathbf{c}}
+\newcommand{ct}{\mathbf{c}^{\mathrm{T}}}
+\newcommand{m}{\mathbf{m}}
+\newcommand{r}{\mathbf{r}}
+\newcommand{rt}{\mathbf{r}^{\mathrm{T}}}
+\newcommand{rl}{\mathbf{r}_{\Lambda}}
+\newcommand{yt}{\mathbf{y}^{\mathrm{T}}}
+\newcommand{L}{\mathbf{L}}
+\newcommand{Lb}{\mathbf{L}_{B}}
+\newcommand{Li}{\mathbf{L}^{-1}}
+\newcommand{Lti}{\mathbf{L}^{-\mathrm{T}}}
+\newcommand{Lt}{\mathbf{L}^{\mathrm{T}}}
+\newcommand{Lb}{\mathbf{L}_{B}}
+\newcommand{Lbt}{\mathbf{L}_{B}^{\mathrm{T}}}
+\newcommand{Lbti}{\mathbf{L}_{B}^{-\mathrm{T}}}
+\newcommand{Lbi}{\mathbf{L}_{B}^{-1}}
+$$</div>
+<p>Although the VFE and FITC approximations are derived from different principles, they have a similar log marginal likelihood.</p>
+<div class="math">$$
+-L = \frac{n}{2}\log(2\pi) + \frac{1}{2} \log \det(\Qff - \Lam)
+   + \frac{1}{2}(\y - \m)^{\mathrm{T}}(\Qff + \Lam)^{-1}(\y - \m)
+   + \frac{1}{2\sn} \tr(\T)
+$$</div>
+<p>For FITC
+- <span class="math">\(\Lam = diag[\Kff - \Qff] + \sn \I\)</span>
+- <span class="math">\(\T = 0\)</span></p>
+<p>For VFE:
+- <span class="math">\(\Lam = \sn \I\)</span>
+- <span class="math">\(\T = \Kff - \Qff\)</span></p>
+<p>Throughout, <span class="math">\(\Qff = \Kfu \Kuui \Kuf\)</span>, the Nystrom approximation to the full covariance matrix <span class="math">\(\Kff\)</span>.  Also notice that <span class="math">\(\Lam\)</span> is diagonal, so is easy to invert.  A flag is passed into the PyMC3 class that implements this, choosing which <span class="math">\(\Lam\)</span> and <span class="math">\(\T\)</span> to use.  So here is the derivation so that it is in terms of <span class="math">\(\Lam\)</span>.  This is done so that solves are used instead of direct inverses (especially <span class="math">\(n \times n\)</span> ones!), and only <span class="math">\(m \times m\)</span> Cholesky decompositions are done.</p>
+<h2>Identities</h2>
+<p>Woodbury identity:</p>
+<div class="math">$$
+(\A + \C\B\Ct)^{-1} = \Ai - \Ai \C (\Bi + \Ct \Ai \C)^{-1} \Ct \Ai
+$$</div>
+<p>Matrix determinant lemma:</p>
+<div class="math">$$
+\det(\A + \U\W\Vt) = \det(\Wi + \Vt\Ai\U)\det(\W)\det(\A)
+$$</div>
+<h2>Quadratic term</h2>
+<p>The covariance matrix in the quadratic term is <span class="math">\(n \times n\)</span>, so we need to use the Woodbury matrix identity:</p>
+<div class="math">$$
+\begin{aligned}
+(\Lam + \Qff)^{-1} &amp;= \Lami - \Lami\Kfu(\Kuu + \Kuf\Lami\Kfu)^{-1} \Kuf\Lami \\
+\end{aligned}
+$$</div>
+<p>Next rotate the inverse in brackets using the Cholesky factor of <span class="math">\(\Kuu\)</span> (<span class="math">\(\Kuu\)</span> is <span class="math">\(m \times m\)</span>, where <span class="math">\(m\)</span> is the number of inducing points, <span class="math">\(m &lt; n\)</span>).  So <span class="math">\(\Kuu = \L\Lt\)</span>, and  <span class="math">\(\Kuui = \Lti\Li\)</span>.  We get a more stable matrix to do solves on.  Multiply by an identity matrix made out of <span class="math">\(\L\)</span> on each side,</p>
+<div class="math">$$
+\begin{aligned}
+(\Lam + \Qff)^{-1} 
+  &amp;= \Lami - \Lami\Kfu\Lti\Lt(\Kuu + \Kuf\Lami\Kfu)^{-1}\L\Li\Kuf\Lami \\
+  &amp;= \Lami - \Lami\Kfu\Lti[\Li (\Kuu + \Kuf\Lami\Kfu)\Lti]^{-1}\Li\Kuf\Lami \\
+  &amp;= \Lami - \Lami\Kfu\Lti[\I + \Li\Kuf\Lami\Kfu\Lti]^{-1}\Li\Kuf\Lami \,.
+\end{aligned}
+$$</div>
+<p>Next define <span class="math">\(\A = \Li\Kuf\)</span>, <span class="math">\(\At = \Kfu\Lti\)</span>.  <span class="math">\(\A\)</span> is <span class="math">\(m \times n\)</span>.</p>
+<div class="math">$$
+\begin{aligned}
+(\Lam + \Qff)^{-1} 
+  &amp;= \Lami - \Lami\At[\I + \A\Lami\At]^{-1}\A\Lami \,.
+\end{aligned}
+$$</div>
+<p>Next define <span class="math">\(\r = \y - \m\)</span>, where <span class="math">\(\m\)</span> is the mean function evaluated at the input <span class="math">\(x\)</span> locations.</p>
+<div class="math">$$
+\begin{aligned}
+\rt(\Lam + \Qff)^{-1}\r 
+  &amp;= \rt\Lami\r - \rt\Lami\At[\I + \A\Lami\At]^{-1}\A\Lami\r \,.
+\end{aligned}
+$$</div>
+<p>Then, set <span class="math">\(\B = \I + \A\Lami\At\)</span>, which is <span class="math">\(m \times m\)</span>, and use its Cholesky decomposition, <span class="math">\(\B = \Lb\Lbt\)</span>.</p>
+<div class="math">$$
+\begin{aligned}
+\rt(\Lam + \Qff)^{-1}\r 
+  &amp;= \rt\Lami\r - \rt\Lami\At\Lbti\Lbi\A\Lami\r \,.
+\end{aligned}
+$$</div>
+<p>Next set <span class="math">\(\rl = \Lami\r\)</span>, and <span class="math">\(\c = \Lbi\A\rl\)</span>,</p>
+<div class="math">$$
+\begin{aligned}
+\rt(\Lam + \Qff)^{-1}\r 
+  &amp;= \rt\rl - \ct\c \,.
+\end{aligned}
+$$</div>
+<h2>Term with determinant</h2>
+<p>Using the determinant lemma,</p>
+<div class="math">$$
+\begin{aligned}
+\det(\Lam + \Qff) 
+  &amp;= \det(\Lam + \Kuf\Lami\Kfu)\det(\Kuui)\det(\Lam) \\
+  &amp;= \det(\L\Lt + \Kuf\Lami\Kfu)\det(\Lti\Li)\det(\Lam) \\
+  &amp;= \det(\L\Lt + \Kuf\Lami\Kfu)\det(\Lti)\det(\Li)\det(\Lam) \\
+  &amp;= \det(\I + \Li\Kuf\Lami\Kfu\Lti)\det(\Lam) \\
+  &amp;= \det(\I + \A\Lami\At)\det(\Lam)\\
+  &amp;= \det(\B)\det(\Lam)\\
+\end{aligned}
+$$</div>
+<h2>Trace term</h2>
+<p>The trace term is present for VFE, for FITC it equals zero.  Note that <span class="math">\(\tr(\A\B) = \tr(\B\A)\)</span>.</p>
+<div class="math">$$
+\begin{aligned}
+-\frac{1}{2\sn}\tr(\Kff - \Qff) 
+  &amp;= -\frac{1}{2\sn}\tr(\Kff) + \frac{1}{2\sn}\tr(\Qff) \\
+  &amp;= -\frac{1}{2\sn}\tr(\Kff) + \frac{1}{2\sn}\tr(\Kfu\Kuui\Kuf) \\
+  &amp;= -\frac{1}{2\sn}\tr(\Kff) + \frac{1}{2\sn}\tr(\At\A) \\
+  &amp;= -\frac{1}{2\sn}\tr(\Kff) + \frac{1}{2\sn}\tr(\A\At) \\
+\end{aligned}
+$$</div>
+<p>Both <span class="math">\(\tr(\Kff)\)</span> and <span class="math">\(\tr(\A\At)\)</span> can be evaluated without computing the full matrices.</p>
+<div class="math">$$
+\newcommand{ms}{\mathbf{m}_{*}}
+\newcommand{Ksu}{\mathbf{K}_{*u}}
+\newcommand{Kus}{\mathbf{K}_{u*}}
+\newcommand{Kss}{\mathbf{K}_{**}}
+$$</div>
+<h2>Prediction</h2>
+<p>The expressions are derived differently, but result in the exact same formula.  This is the FITC result below.</p>
+<div class="math">$$
+p(f_*) = \mathcal{N}(\mu_*\,,\, \Sigma_*)
+$$</div>
+<p>where</p>
+<div class="math">$$
+\begin{aligned}
+\mu_* &amp;= \ms + \Ksu(\Kuu + \Kuf \Lami \Kfu)^{-1}\Lami(\y - \m) \\
+\Sigma_* &amp;= \Kss - \Ksu\Kuui\Kus + \Ksu(\Kuu + \Kuf\Lami\Kfu)^{-1}\Kus
+\end{aligned}
+$$</div>
+<p>Like what we did with the quadratic term, we multiply by an identity matrix made from the Cholesky factor on <span class="math">\(\Kuu\)</span>.</p>
+<div class="math">$$
+\begin{aligned}
+(\Kuu + \Kuf \Lami \Kfu)^{-1} 
+  &amp;= \Lti\Lt(\Kuu + \Kuf\Lami\Kfu)^{-1}\L\Li \\
+  &amp;= \Lti\Bi\Li \\
+  &amp;= \Lti\Lbti\Lbi\Li \\
+\end{aligned}
+$$</div>
+<p>The substitutions are done the same way with <span class="math">\(\A\)</span>, and we eventually get the result,</p>
+<div class="math">$$
+\begin{aligned}
+\mu_* &amp;= \Ksu \Lti\Lbti\c \\
+\Sigma_* &amp;= \Kss - \Ksu\Li\Lbti\Lbt\Li\Kus
+\end{aligned}
+$$</div>
+<h2>Summary</h2>
+<p>math</p>
+<script type="text/javascript">if (!document.getElementById('mathjaxscript_pelican_#%@#$@#')) {
+    var align = "center",
+        indent = "0em",
+        linebreak = "false";
+
+    if (false) {
+        align = (screen.width < 768) ? "left" : align;
+        indent = (screen.width < 768) ? "0em" : indent;
+        linebreak = (screen.width < 768) ? 'true' : linebreak;
+    }
+
+    var mathjaxscript = document.createElement('script');
+    mathjaxscript.id = 'mathjaxscript_pelican_#%@#$@#';
+    mathjaxscript.type = 'text/javascript';
+    mathjaxscript.src = 'https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.0/MathJax.js?config=TeX-AMS-MML_HTMLorMML';
+    mathjaxscript[(window.opera ? "innerHTML" : "text")] =
+        "MathJax.Hub.Config({" +
+        "    config: ['MMLorHTML.js']," +
+        "    TeX: { extensions: ['AMSmath.js','AMSsymbols.js','noErrors.js','noUndefined.js'], equationNumbers: { autoNumber: 'AMS' } }," +
+        "    jax: ['input/TeX','input/MathML','output/HTML-CSS']," +
+        "    extensions: ['tex2jax.js','mml2jax.js','MathMenu.js','MathZoom.js']," +
+        "    displayAlign: '"+ align +"'," +
+        "    displayIndent: '"+ indent +"'," +
+        "    showMathMenu: true," +
+        "    messageStyle: 'normal'," +
+        "    tex2jax: { " +
+        "        inlineMath: [ ['\\\\(','\\\\)'] ], " +
+        "        displayMath: [ ['$$','$$'] ]," +
+        "        processEscapes: true," +
+        "        preview: 'TeX'," +
+        "    }, " +
+        "    'HTML-CSS': { " +
+        "        styles: { '.MathJax_Display, .MathJax .mo, .MathJax .mi, .MathJax .mn': {color: 'inherit ! important'} }," +
+        "        linebreaks: { automatic: "+ linebreak +", width: '90% container' }," +
+        "    }, " +
+        "}); " +
+        "if ('default' !== 'default') {" +
+            "MathJax.Hub.Register.StartupHook('HTML-CSS Jax Ready',function () {" +
+                "var VARIANT = MathJax.OutputJax['HTML-CSS'].FONTDATA.VARIANT;" +
+                "VARIANT['normal'].fonts.unshift('MathJax_default');" +
+                "VARIANT['bold'].fonts.unshift('MathJax_default-bold');" +
+                "VARIANT['italic'].fonts.unshift('MathJax_default-italic');" +
+                "VARIANT['-tex-mathit'].fonts.unshift('MathJax_default-italic');" +
+            "});" +
+            "MathJax.Hub.Register.StartupHook('SVG Jax Ready',function () {" +
+                "var VARIANT = MathJax.OutputJax.SVG.FONTDATA.VARIANT;" +
+                "VARIANT['normal'].fonts.unshift('MathJax_default');" +
+                "VARIANT['bold'].fonts.unshift('MathJax_default-bold');" +
+                "VARIANT['italic'].fonts.unshift('MathJax_default-italic');" +
+                "VARIANT['-tex-mathit'].fonts.unshift('MathJax_default-italic');" +
+            "});" +
+        "}";
+    (document.body || document.getElementsByTagName('head')[0]).appendChild(mathjaxscript);
+}
+</script>
+      </div>
+<!-- /.entry-content -->
+      <footer class="post-info text-muted">
+        <button type="button" class="btn btn-default">          
+          <a href="https://bwengals.github.io/category/posts.html"><div class="fa fa-lg fa-folder-open"></div> posts</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gp.html"><div class="fa fa-lg fa-tag"></div> gp</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gsoc.html"><div class="fa fa-lg fa-tag"></div> gsoc</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gp-approximations.html"><div class="fa fa-lg fa-tag"></div> gp-approximations</a>
+        </button>
+      </footer>
+      <!-- /.post-info -->
+    </section>
+    </div>
+    <footer class="footer">
+      <div class="container">
+        <p class="footer-text">&copy; <a href="https://bwengals.github.io">Bill Engels</a> powered by <a href="http://getpelican.com/">pelican</a></p>
+      </div>
+    </footer>
+    <script src="//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+    <script src="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script>
+  </body>
+</html>

@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+  
+
+    <meta name="tags" content="gp" />
+    <meta name="tags" content="gsoc" />
+
+    <title>GP module refactor - posts</title>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <link href="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="//maxcdn.bootstrapcdn.com/font-awesome/4.2.0/css/font-awesome.min.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/style.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/notebooks.css" rel="stylesheet" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+  <body id="index" class="archive">
+    <!--[if lt IE 7]>
+        <p class="browsehappy">You are using an <strong>outdated</strong> browser. Please <a href="http://browsehappy.com/">upgrade your browser</a> to improve your experience.</p>
+    <![endif]-->
+    <nav class="navbar navbar-default" role="navigation">
+      <div class="container">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target=".navbar-collapse">
+          <span class="sr-only">Toggle navigation</span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          </button>
+          <a class="navbar-brand" href="https://bwengals.github.io">Bill Engels</a>
+        </div>
+        <div class="collapse navbar-collapse navbar-right">
+          <ul class="nav navbar-nav">
+            <li><a href="https://bwengals.github.io/tags.html">tags</a></li>
+          </ul>
+        </div>
+        <!-- /.navbar-collapse -->
+      </div>
+    </nav>
+    <div class="container">
+    <section id="content" class="body">
+      <header>
+        <h1 class="entry-title">
+          GP module refactor
+        </h1>
+        
+        <div class="text-muted">Wed 26 July 2017</div>
+      </header>
+<!-- .entry-content -->
+      <div class="article_content">
+        <p>An outline of my refactor of the GP module so far.  </p>
+
+
+<h2>Sketch of the previous design</h2>
+<p>The previous design worked pretty well -- until it came time to think about adding in more advanced features and ways to speed up GPs.  Things like:</p>
+<ul>
+<li>Sampling from components of additive GPs.</li>
+<li>GPs on a grid using Kronecker structure.</li>
+<li>Covariance functions that have compact support.  Need sparse <code>Solve</code> and <code>Cholesky</code> ops.</li>
+<li>GP approximations that can be trained with stochastic gradient descent.</li>
+<li>GP approximations which work with latent variable models.</li>
+<li>Stacking GPs on other GPs, or warping the inputs of a GP with a neural net.</li>
+</ul>
+<p>Thinking about how to do each of these started becoming complicated.  Any of these might take up the rest of the GSOC time, and I'm hoping to have some time after GP's to chip in on other parts of PyMC3.  </p>
+<p>I think support for additive GPs is the most important item on that list.  Many introductions motivate GPs by describing how complex data
+can be broken down into components using using sums of GPs, each with specialized and thoughtfully designed covariance functions.</p>
+<h2>Problems (in particular, additive gps)</h2>
+<p>I wanted to make sure this was easy to do using PyMC3's GP library.  I was working on reproducing the <code>Keeling curve</code> analysis from the Rasmussen+Williams book, and also the <code>birthday</code> analysis in BDA3.  Doing so, I found that what I had so far was clumsy for modeling additive GPs.  Adding covariance functions works great,</p>
+<div class="highlight"><pre><span></span>cov = cov1 + cov2 + cov3 + ...
+</pre></div>
+
+
+<p>But there is no reliable way to define</p>
+<div class="highlight"><pre><span></span>gp = gp1 + gp2 + gp3 + ...
+</pre></div>
+
+
+<p>Overriding <code>__add__</code> wouldn't be so bad, but problems arise later it would be nice
+to look at samples from <code>gp1</code>, <code>gp2</code> or <code>gp3</code>.  Doing this (cleanly!) was difficult.  It would've required repeating many of the argument values when defining <code>gp1</code>, <code>gp2</code>:</p>
+<div class="highlight"><pre><span></span>gp1 = pm.gp.GP(name=&quot;gp1&quot;, X, cov1, mean1, sigma, &quot;FITC&quot;, ...)
+gp2 = pm.gp.GP(name=&quot;gp2&quot;, X, cov2, mean2, sigma, &quot;FITC&quot;, ...)
+...
+</pre></div>
+
+
+<p>But each of the three <code>gp</code>'s don't have additive noise (parametrized by <code>sigma</code>) -- in this case the sum of them, after integrating out the latent gp function, is what does.  So this syntax would be misleading.  And what if a different <code>X</code> is given accidentally?  What if one used the "FITC" approximation, and the other used "VFE", how could they add?  This setup would be error prone for the user.  It would also be error prone for me to <code>raise</code> exceptions in all these cases.  </p>
+<p>Below is an outline of the GP module before I reworked it.</p>
+<h2>Sketch of old design</h2>
+<div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">GP</span><span class="p">(</span> <span class="o">...</span> <span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot; </span>
+<span class="sd">    This function is called by the user.  It is responsible </span>
+<span class="sd">    for parsing the combination of argument values passed by </span>
+<span class="sd">    the user, and then for returning the correct GP implementation.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># ...</span>
+    <span class="c1"># lots of parsing, checking, and setting things up here</span>
+    <span class="c1"># ...</span>
+    <span class="k">return</span> <span class="n">GPmodel</span>
+
+
+<span class="k">class</span> <span class="nc">_GP</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Base class for GP classes.  Only serves to provide a `random` method.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">random</span><span class="p">(</span><span class="o">...</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; Calls either `prior` or `conditional` of whatever GP object it</span>
+<span class="sd">        is attached to.  Uses the mean and covariance returned to draw</span>
+<span class="sd">        samples from MvNormal.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># ...</span>
+        <span class="k">return</span> <span class="n">samples</span>
+
+
+<span class="k">class</span> <span class="nc">GPFullNonConjugate</span><span class="p">(</span><span class="n">_GP</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    GP model where the latent GP itself (usually denoted &quot;f&quot;) is</span>
+<span class="sd">    modeled explicitly.  This model must be used whenever the likelihood</span>
+<span class="sd">    is non-Gaussian.  The interesting part of this class it the `RV` method.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">...</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set the state of self given things like the inputs X, the</span>
+<span class="sd">        covariance function, and the mean function</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">prior</span><span class="p">(</span><span class="o">...</span><span class="p">):</span>
+        <span class="c1"># ...</span>
+        <span class="k">return</span> <span class="n">mean</span><span class="p">,</span> <span class="n">covariance</span>
+
+    <span class="k">def</span> <span class="nf">conditional</span><span class="p">(</span><span class="n">X_new</span><span class="p">):</span>
+        <span class="c1"># ...</span>
+        <span class="k">return</span> <span class="n">mean</span><span class="p">,</span> <span class="n">covariance</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">RV</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        This gets called right after the GP class is first made.  Since this</span>
+<span class="sd">        class doesn&#39;t inherit from a `Distribution`, it doesn&#39;t return a theano</span>
+<span class="sd">        symbolic variable.  The reason I didn&#39;t have it inheret from `Distribution`</span>
+<span class="sd">        is so that reparametrize it as a vector of standard Normals that is rotated</span>
+<span class="sd">        by the Cholesky factor.  </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">v</span> <span class="o">=</span> <span class="n">Normal</span><span class="p">(</span><span class="n">name</span> <span class="o">+</span> <span class="s2">&quot;_rotated_&quot;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+        <span class="n">f</span> <span class="o">=</span> <span class="n">Deterministic</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">tt</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">chol</span><span class="p">,</span> <span class="n">v</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">f</span>
+
+    <span class="k">def</span> <span class="nf">logp</span><span class="p">(</span><span class="o">...</span><span class="p">):</span>
+        <span class="n">In</span> <span class="n">case</span> <span class="n">this</span> <span class="ow">is</span> <span class="n">called</span> <span class="k">for</span> <span class="n">some</span> <span class="n">reason</span><span class="p">,</span> <span class="n">it</span> <span class="n">should</span> <span class="k">return</span> <span class="n">zero</span><span class="o">.</span>  <span class="n">The</span> <span class="n">random</span>
+        <span class="n">variable</span> <span class="n">whose</span> <span class="sb">`logp`</span> <span class="n">should</span> <span class="n">be</span> <span class="n">evaluated</span> <span class="ow">is</span> <span class="sb">`v`</span><span class="o">.</span>
+        <span class="k">return</span> <span class="mf">0.0</span>
+
+
+
+<span class="k">class</span> <span class="nc">GPFullConjugate</span><span class="p">(</span><span class="n">_GP</span><span class="p">,</span> <span class="n">Continuous</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This is the most straightforward implementation.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="o">...</span><span class="p">):</span>
+        <span class="n">basically</span> <span class="n">the</span> <span class="n">same</span> <span class="fm">__init__</span> <span class="k">as</span> <span class="n">GPFullNonConjugate</span><span class="p">,</span> <span class="k">except</span> <span class="k">for</span> <span class="n">a</span> <span class="n">call</span> <span class="n">to</span>
+        <span class="nb">super</span>
+
+    <span class="k">def</span> <span class="nf">prior</span><span class="p">(</span><span class="o">...</span><span class="p">):</span>
+        <span class="c1"># ...</span>
+        <span class="k">return</span> <span class="n">mean</span><span class="p">,</span> <span class="n">covariance</span>
+
+    <span class="k">def</span> <span class="nf">conditional</span><span class="p">(</span><span class="o">...</span><span class="p">):</span>
+        <span class="c1"># ...</span>
+        <span class="k">return</span> <span class="n">mean</span><span class="p">,</span> <span class="n">covariance</span>
+
+    <span class="k">def</span> <span class="nf">logp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="c1"># ...</span>
+        <span class="k">return</span> <span class="n">MvNormal</span><span class="o">.</span><span class="n">dist</span><span class="p">(</span><span class="n">mean</span><span class="p">,</span> <span class="n">covariance</span><span class="p">)</span><span class="o">.</span><span class="n">logp</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">GPSparseConjugate</span><span class="p">(</span><span class="n">_GP</span><span class="p">,</span> <span class="n">Continuous</span><span class="p">):</span>
+     <span class="sd">&quot;&quot;&quot; Set up just like `GPFullConjugate` </span>
+<span class="sd">     &quot;&quot;&quot;</span>  
+
+
+<span class="k">def</span> <span class="nf">sample_gp</span><span class="p">(</span><span class="n">trace</span><span class="p">,</span> <span class="n">gp_object</span><span class="p">,</span> <span class="o">...</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A specialized function for sampling from `gp_object`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>  File &quot;&lt;ipython-input-1-85ad58b5b1b3&gt;&quot;, line 1
+    def GP( ... ):
+              ^
+SyntaxError: invalid syntax
+</pre></div>
+
+
+<h2>Post refactor</h2>
+<p>I ended up changing the syntax a lot.  In order to make the syntax more "math-like", I used <code>__call__</code> in an unusual way.  Hopefully there aren't issues with this that I haven't thought of.  </p>
+<p>The GP model or implementation used is determined by its class name.  There is no factory function like <code>def GP(...)</code>.  When instantiated, the the <code>gp</code> is <em>only</em> assigned a covariance function.  There are no arguments for the type of approximation used, the mean function, or anything else.  The <code>gp</code> objects and how they add together is specified <em>before</em> complete information about the GP is specified.  This guarantees that they will, evantually, get consistent arguments from the user.  At this point, zero mean <code>gp</code>s with the same implementation and a given covariance function are being added.</p>
+<p>Here is how this looks (just for illustration, this code isn't runnable):</p>
+<div class="highlight"><pre><span></span>X = ... # input locations for the GP
+y = ... # observed data with IID Gaussian noise
+
+with pm.Model() as model:
+    # define priors for ℓ1 and ℓ2
+    ...
+
+    # specify that y is the sum of two GP&#39;s with IID Gaussian noise
+    cov1 = pm.gp.ExpQuad(1, ℓ1)
+    gp1 = pm.GPMarginal(cov_func=cov1)
+
+    cov2 = pm.gp.Matern52(1, ℓ2)
+    gp2 = pm.GPMarginal(cov_func=cov2)
+
+    gp = gp1 + gp2
+</pre></div>
+
+
+<p>Parameters like the lengthscales <span class="math">\(\ell\)</span> belong to the covariance functions, not the <code>gp</code> objects.</p>
+<p>Notice that none of these objects have been given a name.  All PyMC3 random variables, and <code>Deterministic</code>s must be assigned a name.  None of the objects that have been defined are a PyMC3 random variable yet.  To construct the actual random variable, first for the marginal likelihood, <code>__call__</code> and <code>conditioned_on</code> have to be called.</p>
+<div class="highlight"><pre><span></span>with model:
+    # define marginal likelihood
+    y_ = gp(name=&quot;y&quot;, size=len(y), mean_func=mean_func).conditioned_on(X, y=y)
+</pre></div>
+
+
+<p>What happened was:</p>
+<ul>
+<li>
+<p>The <strong>call</strong> method for <code>GPMarginal</code> has three non-parameter and non-random variable arguments describing the <code>GP</code> object:</p>
+</li>
+<li>
+<p><code>name</code>, the name to assign to the (in this case, observed) random variable.</p>
+</li>
+<li><code>size</code>, the number of points (input or output) of the GP.  This is kind of a hack to get around some of PyMC3's issues with symbolic shapes.  This argument should be removed if that gets addressed.  I'd expect that most of the time the user will know the dimensions of the GP beforehand or will be able to access them from the data.</li>
+<li><code>mean_func</code>.  The mean function is provided here.  Having the <code>mean_func</code> be part of the state will make it easy to sample from the <code>gp</code> with or without including effects from the mean function.</li>
+</ul>
+<p>A reference to the object is returned, <code>return self</code>.  </p>
+<ul>
+<li>Then <code>conditioned_on(...)</code> is called.  It's arguments are strictly either variables or data, such as the inputs, the observed data, inducing points, or the noise standard deviation.  It returns a PyMC3 random variable that can be the GP's likelihood or its predictive distribution, depending on what the <code>gp</code> is conditioned on.</li>
+</ul>
+<p>The main reason for the separation between state being set in <code>__call__</code> and random variables being set in <code>conditioned_on</code> is to have a nice syntax.  Another reason is so new distributions with different random variables can be remade, without necessarily messing with the object's state.  For instance, one may wish to remove the noise variance parameter, or to use different <code>Xs</code> input locations to predict at.  </p>
+<p>The same <code>gp</code> object is used to construct the predictive distribution, which is used to draw samples from both <code>gp</code>, and <code>gp1</code> or <code>gp2</code>.  <code>conditioned_on</code> is called again to construct a new PyMC3 random variable for the GP's predictive distribution.</p>
+<div class="math">$$
+p(f_* \mid y, X, X_*) \,.
+$$</div>
+<p>The observed data <span class="math">\(y\)</span> at locations <span class="math">\(X\)</span> and the new inputs <span class="math">\(X_*\)</span> are all given.  </p>
+<div class="highlight"><pre><span></span># inference
+with model:
+    trace = pm.sample(1234)
+
+# define predictive distributions
+Xs = np.linspace(0,1,200)[:,None]
+with model:
+    # Recover the latent function values from gp1.  Notice that Xs=X.  
+    #   It&#39;s not required to do this, just possible.
+    f1 = gp1(&quot;f1&quot;, size=200, mean_func=pm.Zero()).conditioned_on(X, y=y, Xs=X)
+
+    # The predictive distribution of gp
+    f_pred = gp1(&quot;f_pred&quot;, size=200, mean=mean_func).conditioned_on(X, y=y, Xs=Xs)
+</pre></div>
+
+
+<p>Since <code>conditioned_on</code> returns PyMC3 random variables, <code>sample_ppc</code> can be used!  There is no longer a need to define a specialized interface to sample from a <code>gp</code> object.</p>
+<div class="highlight"><pre><span></span># draw samples
+with model:
+    samples = pm.sample_ppc(trace, vars=[f1, f_pred], samples=100)
+</pre></div>
+
+
+<p>For nearly all the current GP implementations, <code>f</code> or <code>f_pred</code> are plain instances of <code>MvNormal</code> with particular mean and covariance matrices.</p>
+<h2>Sketch of new design</h2>
+<p>I think the new design might even be simpler than the old.  Here is a sketch of how things are now</p>
+<div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">GPBase</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    All subclasses of GPBase must implement `_prior_rv`, and `_predictive_rv`.</span>
+<span class="sd">    These two methods must return a PyMC3 random variable.  Subclasses of</span>
+<span class="sd">    GPBase should not overwrite `conditioned_on`.</span>
+<span class="sd">    &quot;&quot;&quot;</span> 
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cov_func</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cov_func</span> <span class="o">=</span> <span class="n">cov_func</span>
+
+    <span class="k">def</span> <span class="fm">__add__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">):</span>
+        <span class="c1"># error if they are not the same type</span>
+        <span class="k">return</span> <span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)(</span><span class="bp">self</span><span class="o">.</span><span class="n">cov_func</span> <span class="o">+</span> <span class="n">other</span><span class="o">.</span><span class="n">cov_func</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">mean_func</span><span class="p">):</span>
+        <span class="c1"># set state</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="n">name</span>
+        <span class="c1">#...</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="k">def</span> <span class="nf">conditioned_on</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">X</span><span class="p">,</span> <span class="n">Xs</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">Xs</span> <span class="ow">is</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_prior_rv</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_predictive_rv</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+
+    <span class="k">def</span> <span class="nf">_prior_rv</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">X</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+
+    <span class="k">def</span> <span class="nf">_predictive_rv</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">X</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+
+
+<span class="k">class</span> <span class="nc">GPMarginal</span><span class="p">(</span><span class="n">GPBase</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This is an example of a GP subclass a user would actually use.</span>
+<span class="sd">    As required, _prior_rv and _predictive_rv return random variables.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">_build_prior</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">X</span><span class="p">,</span> <span class="n">sigma</span><span class="p">):</span>
+        <span class="c1"># math goes here</span>
+        <span class="n">mu</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean_func</span><span class="p">(</span><span class="n">X</span><span class="p">)</span>
+        <span class="n">K</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cov_func</span><span class="p">(</span><span class="n">X</span><span class="p">)</span>
+        <span class="c1"># ...</span>
+        <span class="c1"># returns the mean and the cholesky factor of covariance matrix \</span>
+        <span class="c1">#   of the gp likelihood</span>
+        <span class="k">return</span> <span class="n">mu</span><span class="p">,</span> <span class="n">chol</span>  
+
+    <span class="k">def</span> <span class="nf">_build_predictive</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">Xs</span><span class="p">,</span> <span class="n">sigma</span><span class="p">):</span>
+        <span class="c1"># math goes here</span>
+        <span class="k">return</span> <span class="n">mu</span><span class="p">,</span> <span class="n">chol</span>
+
+    <span class="k">def</span> <span class="nf">_prior_rv</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">sigma</span><span class="p">):</span>
+        <span class="n">mu</span><span class="p">,</span> <span class="n">chol</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_prior</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">sigma</span><span class="p">)</span>
+        <span class="c1"># note that `observed` is set here using y, that we conditioned on</span>
+        <span class="k">return</span> <span class="n">MvNormal</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="n">mu</span><span class="p">,</span> <span class="n">chol</span><span class="o">=</span><span class="n">chol</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">size</span><span class="p">,</span> <span class="n">observed</span><span class="o">=</span><span class="n">y</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_predictive_rv</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">Xs</span><span class="p">,</span> <span class="n">sigma</span><span class="p">):</span>
+        <span class="n">mu</span><span class="p">,</span> <span class="n">chol</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_predictive</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">Xs</span><span class="p">,</span> <span class="n">sigma</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">MvNormal</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="n">mu</span><span class="p">,</span> <span class="n">chol</span><span class="o">=</span><span class="n">chol</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">size</span><span class="p">)</span>
+</pre></div>
+
+
+<p>The Theano code for constructing the mean and covariance of these random variables is confined to <code>_build_prior</code>, and <code>_build_predictive</code>.  This keeps the implementation readable and cleanly separated from both the required random variable constructors, <code>_prior_rv</code> and <code>_predictive_rv</code>, or the programming logic, which can just be placed into other methods specific to the particular GP implementation.  </p>
+<p>I think this setup should make for a pretty efficient pattern to help implement other GP models or approximations.  While I was at it, I implemented a class for a Student's T process in about 20 lines of code!</p>
+<h2>Example</h2>
+<p>Here is an actual runnable example.  This implementation is of a full GP where the latent <code>f</code> hasn't been integrated out.  <strong>This code isn't part of master yet, so to run you would need to check out the branch "gp-module"</strong>.</p>
+<div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pymc3</span> <span class="kn">as</span> <span class="nn">pm</span>
+<span class="kn">import</span> <span class="nn">theano.tensor</span> <span class="kn">as</span> <span class="nn">tt</span>
+<span class="o">%</span><span class="n">matplotlib</span> <span class="n">inline</span>
+
+<span class="c1"># data</span>
+<span class="n">X</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">40</span><span class="p">)[:,</span> <span class="bp">None</span><span class="p">]</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="mi">2</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="o">*</span><span class="n">X</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span><span class="o">*</span><span class="mi">2</span><span class="p">)</span> <span class="o">+</span> <span class="mf">0.2</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">40</span><span class="p">)</span>
+
+<span class="k">with</span> <span class="n">pm</span><span class="o">.</span><span class="n">Model</span><span class="p">()</span> <span class="k">as</span> <span class="n">model</span><span class="p">:</span>
+    <span class="err">ℓ</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;ℓ&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="err">η</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;η&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+    <span class="n">cov</span> <span class="o">=</span> <span class="n">tt</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="err">η</span><span class="p">)</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ExpQuad</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="p">)</span> 
+    <span class="n">mean</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">mean</span><span class="o">.</span><span class="n">Zero</span><span class="p">()</span>
+
+    <span class="c1"># GPLatent samples the latent function values of the GP directly</span>
+    <span class="n">gp</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">GPLatent</span><span class="p">(</span><span class="n">cov_func</span><span class="o">=</span><span class="n">cov</span><span class="p">)</span>
+    <span class="n">f</span> <span class="o">=</span> <span class="n">gp</span><span class="p">(</span><span class="s2">&quot;f&quot;</span><span class="p">,</span> <span class="mi">40</span><span class="p">,</span> <span class="n">mean</span><span class="p">)</span><span class="o">.</span><span class="n">conditioned_on</span><span class="p">(</span><span class="n">X</span><span class="p">)</span>
+
+    <span class="err">σ</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σ&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+    <span class="n">y_</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s2">&quot;y_&quot;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="n">f</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="err">σ</span><span class="p">,</span> <span class="n">observed</span><span class="o">=</span><span class="n">y</span><span class="p">)</span>
+    <span class="n">tr</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span><span class="mi">1000</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>Auto-assigning NUTS sampler...
+Initializing NUTS using advi+adapt_diag...
+Average Loss = 53.373:   7%|▋         | 13484/200000 [00:24&lt;06:24, 485.59it/s]
+Convergence archived at 13500
+Interrupted at 13,500 [6%]: Average Loss = 74.843
+100%|██████████| 1500/1500 [04:57&lt;00:00,  6.72it/s]/home/bill/pymc3/pymc3/step_methods/hmc/nuts.py:463: UserWarning: Chain 0 contains 25 diverging samples after tuning. If increasing `target_accept` does not help try to reparameterize.
+  % (self._chain_id, n_diverging))
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">pm</span><span class="o">.</span><span class="n">traceplot</span><span class="p">(</span><span class="n">tr</span><span class="p">);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/gp-refactor_files/gp-refactor_9_0.png" /></p>
+<div class="highlight"><pre><span></span><span class="c1"># points to predict at</span>
+<span class="n">Xs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="mf">0.2</span><span class="p">,</span> <span class="mf">1.2</span><span class="p">,</span> <span class="mi">100</span><span class="p">)[:,</span><span class="bp">None</span><span class="p">]</span>
+
+<span class="c1"># make predictive distribution</span>
+<span class="k">with</span> <span class="n">model</span><span class="p">:</span>
+    <span class="n">f_pred</span> <span class="o">=</span> <span class="n">gp</span><span class="p">(</span><span class="s2">&quot;f_pred&quot;</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="n">mean</span><span class="p">)</span><span class="o">.</span><span class="n">conditioned_on</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">Xs</span><span class="o">=</span><span class="n">Xs</span><span class="p">,</span> <span class="n">f</span><span class="o">=</span><span class="n">f</span><span class="p">)</span>
+
+<span class="c1"># sample from f_pred with sample_ppc</span>
+<span class="k">with</span> <span class="n">model</span><span class="p">:</span>
+    <span class="n">samples</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">sample_ppc</span><span class="p">(</span><span class="n">tr</span><span class="p">,</span> <span class="nb">vars</span><span class="o">=</span><span class="p">[</span><span class="n">f_pred</span><span class="p">],</span> <span class="n">samples</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">Xs</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">samples</span><span class="p">[</span><span class="n">f_pred</span><span class="o">.</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.1</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">X</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="p">(</span><span class="n">tr</span><span class="p">[</span><span class="s2">&quot;f&quot;</span><span class="p">][</span><span class="o">-</span><span class="mi">100</span><span class="p">:])</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.1</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">X</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">y</span><span class="p">,</span> <span class="s1">&#39;ko&#39;</span><span class="p">);</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>100%|██████████| 100/100 [00:00&lt;00:00, 113.06it/s]
+</pre></div>
+
+
+<p><img alt="png" src="images/gp-refactor_files/gp-refactor_10_1.png" /></p>
+<script type="text/javascript">if (!document.getElementById('mathjaxscript_pelican_#%@#$@#')) {
+    var align = "center",
+        indent = "0em",
+        linebreak = "false";
+
+    if (false) {
+        align = (screen.width < 768) ? "left" : align;
+        indent = (screen.width < 768) ? "0em" : indent;
+        linebreak = (screen.width < 768) ? 'true' : linebreak;
+    }
+
+    var mathjaxscript = document.createElement('script');
+    mathjaxscript.id = 'mathjaxscript_pelican_#%@#$@#';
+    mathjaxscript.type = 'text/javascript';
+    mathjaxscript.src = 'https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.0/MathJax.js?config=TeX-AMS-MML_HTMLorMML';
+    mathjaxscript[(window.opera ? "innerHTML" : "text")] =
+        "MathJax.Hub.Config({" +
+        "    config: ['MMLorHTML.js']," +
+        "    TeX: { extensions: ['AMSmath.js','AMSsymbols.js','noErrors.js','noUndefined.js'], equationNumbers: { autoNumber: 'AMS' } }," +
+        "    jax: ['input/TeX','input/MathML','output/HTML-CSS']," +
+        "    extensions: ['tex2jax.js','mml2jax.js','MathMenu.js','MathZoom.js']," +
+        "    displayAlign: '"+ align +"'," +
+        "    displayIndent: '"+ indent +"'," +
+        "    showMathMenu: true," +
+        "    messageStyle: 'normal'," +
+        "    tex2jax: { " +
+        "        inlineMath: [ ['\\\\(','\\\\)'] ], " +
+        "        displayMath: [ ['$$','$$'] ]," +
+        "        processEscapes: true," +
+        "        preview: 'TeX'," +
+        "    }, " +
+        "    'HTML-CSS': { " +
+        "        styles: { '.MathJax_Display, .MathJax .mo, .MathJax .mi, .MathJax .mn': {color: 'inherit ! important'} }," +
+        "        linebreaks: { automatic: "+ linebreak +", width: '90% container' }," +
+        "    }, " +
+        "}); " +
+        "if ('default' !== 'default') {" +
+            "MathJax.Hub.Register.StartupHook('HTML-CSS Jax Ready',function () {" +
+                "var VARIANT = MathJax.OutputJax['HTML-CSS'].FONTDATA.VARIANT;" +
+                "VARIANT['normal'].fonts.unshift('MathJax_default');" +
+                "VARIANT['bold'].fonts.unshift('MathJax_default-bold');" +
+                "VARIANT['italic'].fonts.unshift('MathJax_default-italic');" +
+                "VARIANT['-tex-mathit'].fonts.unshift('MathJax_default-italic');" +
+            "});" +
+            "MathJax.Hub.Register.StartupHook('SVG Jax Ready',function () {" +
+                "var VARIANT = MathJax.OutputJax.SVG.FONTDATA.VARIANT;" +
+                "VARIANT['normal'].fonts.unshift('MathJax_default');" +
+                "VARIANT['bold'].fonts.unshift('MathJax_default-bold');" +
+                "VARIANT['italic'].fonts.unshift('MathJax_default-italic');" +
+                "VARIANT['-tex-mathit'].fonts.unshift('MathJax_default-italic');" +
+            "});" +
+        "}";
+    (document.body || document.getElementsByTagName('head')[0]).appendChild(mathjaxscript);
+}
+</script>
+      </div>
+<!-- /.entry-content -->
+      <footer class="post-info text-muted">
+        <button type="button" class="btn btn-default">          
+          <a href="https://bwengals.github.io/category/posts.html"><div class="fa fa-lg fa-folder-open"></div> posts</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gp.html"><div class="fa fa-lg fa-tag"></div> gp</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gsoc.html"><div class="fa fa-lg fa-tag"></div> gsoc</a>
+        </button>
+      </footer>
+      <!-- /.post-info -->
+    </section>
+    </div>
+    <footer class="footer">
+      <div class="container">
+        <p class="footer-text">&copy; <a href="https://bwengals.github.io">Bill Engels</a> powered by <a href="http://getpelican.com/">pelican</a></p>
+      </div>
+    </footer>
+    <script src="//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+    <script src="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script>
+  </body>
+</html>

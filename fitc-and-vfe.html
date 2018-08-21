@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+  
+
+    <meta name="tags" content="gp" />
+    <meta name="tags" content="gsoc" />
+    <meta name="tags" content="gp-approximations" />
+
+    <title>FITC and VFE - posts</title>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <link href="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="//maxcdn.bootstrapcdn.com/font-awesome/4.2.0/css/font-awesome.min.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/style.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/notebooks.css" rel="stylesheet" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+  <body id="index" class="archive">
+    <!--[if lt IE 7]>
+        <p class="browsehappy">You are using an <strong>outdated</strong> browser. Please <a href="http://browsehappy.com/">upgrade your browser</a> to improve your experience.</p>
+    <![endif]-->
+    <nav class="navbar navbar-default" role="navigation">
+      <div class="container">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target=".navbar-collapse">
+          <span class="sr-only">Toggle navigation</span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          </button>
+          <a class="navbar-brand" href="https://bwengals.github.io">Bill Engels</a>
+        </div>
+        <div class="collapse navbar-collapse navbar-right">
+          <ul class="nav navbar-nav">
+            <li><a href="https://bwengals.github.io/tags.html">tags</a></li>
+          </ul>
+        </div>
+        <!-- /.navbar-collapse -->
+      </div>
+    </nav>
+    <div class="container">
+    <section id="content" class="body">
+      <header>
+        <h1 class="entry-title">
+          FITC and VFE
+        </h1>
+        
+        <div class="text-muted">Wed 28 June 2017</div>
+      </header>
+<!-- .entry-content -->
+      <div class="article_content">
+        <p>Two general Gaussian Process approximation methods are FITC (fully independent training conditional), and VFE (variational free energy).  </p>
+
+
+<p>These GP approximations don't form the full covariance matrix over all <span class="math">\(n\)</span> training inputs.  Instead they rely on <span class="math">\(m &lt; n\)</span> <em>inducing points</em>, which are "strategically" placed throughout the domain.  Both of these approximations reduce the <span class="math">\(\mathcal{O(n^3)}\)</span> complexity of GPs down to <span class="math">\(\mathcal{O(nm^2)}\)</span> --- a significant speed up.  The memory requirements scale down a bit too, but not as much.  They are commonly referred to as <em>sparse</em> approximations, in the sense of being data sparse.  The downside of sparse approximations is that they reduce the expressiveness of the GP.  Reducing the dimension of the covariance matrix effectively reduces the number of covariance matrix eigenvectors that can be used to fit the data.  </p>
+<h2>FITC</h2>
+<p>The FITC approximation is generally considered the "gold-standard" GP approximation.  It was originally called sparse Gaussian Processes using pseudo-inputs (SGPP) [Snelson+Ghahramani, 2006].  It was reformulated by [Quinonero-Candela+Rasmussen, 2006].  Therein, they showed that the FITC approximation can be thought of as not just an approximation, but also as sort of an odd Gaussian Process prior in its own right,</p>
+<div class="math">$$
+f \sim \mathcal{GP}_{FITC}(0\,, Q_{ff} - \mathrm{diag}[K_{ff} - Q_{ff}]) \,.
+$$</div>
+<p>The matrix <span class="math">\(Q_{ff}\)</span> is the Nystrom approximation to the full covariance matrix, <span class="math">\(K_{ff}\)</span>.</p>
+<div class="math">$$
+Q_{ff} = K_{fu}K_{uu}^{-1}K_{uf}
+$$</div>
+<h2>VFE</h2>
+<p>The VFE approximation is a bit newer [Titsias 2009], and is derived from a variational approach.  The marginal likelihood is derived by trying to minimize the Kullback-Leibler divergence between the sparse GP and the full GP.  It uses a variational formulation to obtain a lower bound on the marginal likelihood.  </p>
+<h2>Comparison</h2>
+<p>Currently, both of these methods can only be applied to Gaussian Process models with IID Gaussian noise:</p>
+<div class="math">$$
+\begin{aligned}
+y \sim N(f\,, \sigma^2 \mathbf{I})&amp; \\
+f \sim \mathcal{GP}(\mu(x)\,, k(x, x'))&amp;\\
+\end{aligned}
+$$</div>
+<p>I'm positive VFE can only be used in this scenario.  I'm not completely convinced that FITC cannot be used with Gaussian noise that has correlations.   Neither method is intended to be used with non-Gaussian likelihoods.  Interestingly, both methods have a similar form for the marginal likelihood:</p>
+<div class="math">$$
+-\mathcal{L} = \frac{n}{2}\log(2\pi) + \frac{1}{2} \log|Q_{ff} + G| +
+               \frac{1}{2}y^T(Q_{ff} + G)^{-1}y + 
+               \frac{1}{2\sigma_n^2}tr(T)
+$$</div>
+<p>
+where <span class="math">\(G_{FITC} = \mathrm{diag}[K_{ff} - Q_{ff}] + \sigma^2_n I\)</span>, and <span class="math">\(G_{VFE} = \sigma^2_n I\)</span>.  Also, 
+<span class="math">\(T_{VFE} = K_{ff} - Q_{ff}\)</span>, while <span class="math">\(T_{FITC} = 0\)</span>.  Because of this similarity, I implemented 
+both methods in PyMC3 with a flag to use either approximation.  I plan on Latex'ing this up and posting it soon, it took some time to work out! </p>
+<h1>Examples</h1>
+<h2>1 Dimensional Data, 50 data points</h2>
+<div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pymc3</span> <span class="kn">as</span> <span class="nn">pm</span>
+
+<span class="kn">import</span> <span class="nn">theano</span>
+<span class="kn">import</span> <span class="nn">theano.tensor</span> <span class="kn">as</span> <span class="nn">tt</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="kn">as</span> <span class="nn">np</span>
+
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="kn">as</span> <span class="nn">plt</span>
+<span class="o">%</span><span class="n">matplotlib</span> <span class="n">inline</span>
+<span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">seed</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">nx</span><span class="p">,</span> <span class="n">nu</span> <span class="o">=</span> <span class="mi">60</span><span class="p">,</span> <span class="mi">7</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">nx</span><span class="p">)</span>
+<span class="n">xu</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">nu</span><span class="p">)</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">x</span> <span class="o">*</span> <span class="mf">2.5</span><span class="p">)</span> <span class="o">+</span> <span class="mf">0.3</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">nx</span><span class="p">)</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="s1">&#39;ko&#39;</span><span class="p">,</span> <span class="n">ms</span><span class="o">=</span><span class="mi">2</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">xu</span><span class="p">,</span> <span class="mf">0.0</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">xu</span><span class="p">)),</span> <span class="s1">&#39;rx&#39;</span><span class="p">,</span> <span class="n">ms</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="p">[:,</span><span class="bp">None</span><span class="p">];</span> <span class="n">xu</span> <span class="o">=</span> <span class="n">xu</span><span class="p">[:,</span><span class="bp">None</span><span class="p">]</span>
+<span class="n">xs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">1.1</span><span class="p">,</span> <span class="mi">100</span><span class="p">)</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/fitc-vfe_files/fitc-vfe_4_0.png" /></p>
+<h2>Full GP</h2>
+<div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">pm</span><span class="o">.</span><span class="n">Model</span><span class="p">()</span> <span class="k">as</span> <span class="n">model</span><span class="p">:</span>
+    <span class="err">ℓ</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;ℓ&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">1.5</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
+    <span class="err">σ</span><span class="n">_f</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σ_f&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="err">σ</span><span class="n">_n</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σ_n&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="n">cov</span> <span class="o">=</span> <span class="n">tt</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="err">σ</span><span class="n">_f</span><span class="p">)</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ExpQuad</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="p">)</span>
+    <span class="n">gp</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">GP</span><span class="p">(</span><span class="s2">&quot;gp&quot;</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">cov</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="err">σ</span><span class="n">_n</span><span class="p">,</span> <span class="n">observed</span><span class="o">=</span><span class="n">y</span><span class="p">)</span>
+    <span class="n">trace</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span><span class="mi">1000</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>Auto-assigning NUTS sampler...
+Initializing NUTS using ADVI...
+Average Loss = 74.909:   7%|▋         | 13198/200000 [00:29&lt;06:01, 516.70it/s]
+Convergence archived at 13200
+Interrupted at 13,200 [6%]: Average Loss = 94.177
+100%|██████████| 1500/1500 [01:00&lt;00:00, 32.17it/s]
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">pm</span><span class="o">.</span><span class="n">traceplot</span><span class="p">(</span><span class="n">trace</span><span class="p">);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/fitc-vfe_files/fitc-vfe_7_0.png" /></p>
+<h3>Posterior sampling</h3>
+<div class="highlight"><pre><span></span><span class="n">Xs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="mf">0.2</span><span class="p">,</span> <span class="mf">1.2</span><span class="p">,</span> <span class="mi">150</span><span class="p">)[:,</span> <span class="bp">None</span><span class="p">]</span>
+<span class="k">with</span> <span class="n">model</span><span class="p">:</span>
+    <span class="n">samples</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">sample_gp</span><span class="p">(</span><span class="n">trace</span><span class="p">,</span> <span class="n">gp</span><span class="p">,</span> <span class="n">Xs</span><span class="p">,</span> <span class="n">n_samples</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">obs_noise</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">y</span><span class="p">,</span> <span class="s1">&#39;ko&#39;</span><span class="p">,</span> <span class="n">ms</span><span class="o">=</span><span class="mi">2</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">Xs</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">samples</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="s2">&quot;steelblue&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.4</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="s2">&quot;Full GP&quot;</span><span class="p">);</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>100%|██████████| 20/20 [00:13&lt;00:00,  1.57it/s]
+</pre></div>
+
+
+<p><img alt="png" src="images/fitc-vfe_files/fitc-vfe_9_1.png" /></p>
+<h2>FITC</h2>
+<p>There are 3 arguments to GP that involve the FITC or VFE approximation, <code>inducing_points</code>, <code>n_inducing</code> and <code>approx</code>.  By default, all of these arguments are <code>None</code> and the full GP is used.  At least one of <code>n_inducing</code> and <code>inducing_points</code> must be provided.  If <code>approx</code> is not specified, <code>FITC</code> is used by default. </p>
+<p>If <code>n_inducing</code> is provided, the inducing point locations are chosen by running K-means on the input matrix, <code>X</code>.</p>
+<div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">pm</span><span class="o">.</span><span class="n">Model</span><span class="p">()</span> <span class="k">as</span> <span class="n">model</span><span class="p">:</span>
+    <span class="err">ℓ</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;ℓ&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">1.5</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
+    <span class="err">σ</span><span class="n">_f</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σ_f&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="err">σ</span><span class="n">_n</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σ_n&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="n">cov</span> <span class="o">=</span> <span class="n">tt</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="err">σ</span><span class="n">_f</span><span class="p">)</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Matern52</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="p">)</span>
+    <span class="n">gp</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">GP</span><span class="p">(</span><span class="s2">&quot;gp&quot;</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">cov</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="err">σ</span><span class="n">_n</span><span class="p">,</span> <span class="n">inducing_points</span><span class="o">=</span><span class="n">xu</span><span class="p">,</span> <span class="n">observed</span><span class="o">=</span><span class="n">y</span><span class="p">)</span>
+    <span class="n">trace</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span><span class="mi">1000</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>Using FITC approximation for gp
+Auto-assigning NUTS sampler...
+Initializing NUTS using ADVI...
+Average Loss = 75.271:   6%|▌         | 11650/200000 [00:17&lt;04:35, 682.78it/s]
+Convergence archived at 11700
+Interrupted at 11,700 [5%]: Average Loss = 96.56
+100%|██████████| 1500/1500 [00:58&lt;00:00, 25.59it/s]
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">pm</span><span class="o">.</span><span class="n">traceplot</span><span class="p">(</span><span class="n">trace</span><span class="p">);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/fitc-vfe_files/fitc-vfe_12_0.png" /></p>
+<h3>Posterior sampling</h3>
+<div class="highlight"><pre><span></span><span class="n">Xs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="mf">0.2</span><span class="p">,</span> <span class="mf">1.2</span><span class="p">,</span> <span class="mi">150</span><span class="p">)[:,</span> <span class="bp">None</span><span class="p">]</span>
+<span class="k">with</span> <span class="n">model</span><span class="p">:</span>
+    <span class="n">samples</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">sample_gp</span><span class="p">(</span><span class="n">trace</span><span class="p">,</span> <span class="n">gp</span><span class="p">,</span> <span class="n">Xs</span><span class="p">,</span> <span class="n">n_samples</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">obs_noise</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">y</span><span class="p">,</span> <span class="s1">&#39;ko&#39;</span><span class="p">,</span> <span class="n">ms</span><span class="o">=</span><span class="mi">2</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">Xs</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">samples</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="s2">&quot;steelblue&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.4</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="s2">&quot;FITC&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">xu</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="o">-</span><span class="mi">2</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">xu</span><span class="p">)),</span> <span class="s2">&quot;rx&quot;</span><span class="p">);</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>100%|██████████| 20/20 [00:26&lt;00:00,  1.32s/it]
+</pre></div>
+
+
+<p><img alt="png" src="images/fitc-vfe_files/fitc-vfe_14_1.png" /></p>
+<p>If you look at the GP predictive samples where there aren't inducing points, the approximations are noticeably worse than the full GP.  Here the predictions go towards the FITC prior.  </p>
+<h2>VFE with k-means</h2>
+<p>Instead of randomly setting the inducing points, we choose them with K-means.</p>
+<div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">pm</span><span class="o">.</span><span class="n">Model</span><span class="p">()</span> <span class="k">as</span> <span class="n">model</span><span class="p">:</span>
+    <span class="err">ℓ</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;ℓ&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">1.5</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
+    <span class="err">σ</span><span class="n">_f</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σ_f&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="err">σ</span><span class="n">_n</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σ_n&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="n">cov</span> <span class="o">=</span> <span class="n">tt</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="err">σ</span><span class="n">_f</span><span class="p">)</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Matern52</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="p">)</span>
+    <span class="n">gp</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">GP</span><span class="p">(</span><span class="s2">&quot;gp&quot;</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">cov</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="err">σ</span><span class="n">_n</span><span class="p">,</span> <span class="n">n_inducing</span><span class="o">=</span><span class="n">nu</span><span class="p">,</span> <span class="n">approx</span><span class="o">=</span><span class="s2">&quot;vfe&quot;</span><span class="p">,</span> <span class="n">observed</span><span class="o">=</span><span class="n">y</span><span class="p">)</span>
+    <span class="n">trace</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span><span class="mi">1000</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>Initializing inducing point locations with K-Means...
+Auto-assigning NUTS sampler...
+Initializing NUTS using ADVI...
+Average Loss = 75.402:   6%|▌         | 11633/200000 [00:17&lt;04:39, 673.81it/s]
+Convergence archived at 11700
+Interrupted at 11,700 [5%]: Average Loss = 96.69
+100%|██████████| 1500/1500 [00:40&lt;00:00, 36.69it/s]
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">pm</span><span class="o">.</span><span class="n">traceplot</span><span class="p">(</span><span class="n">trace</span><span class="p">);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/fitc-vfe_files/fitc-vfe_17_0.png" /></p>
+<h3>Posterior sampling</h3>
+<div class="highlight"><pre><span></span><span class="n">xs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">1.1</span><span class="p">,</span> <span class="mi">100</span><span class="p">)[:,</span> <span class="bp">None</span><span class="p">]</span>
+<span class="k">with</span> <span class="n">model</span><span class="p">:</span>
+    <span class="n">samples</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">sample_gp</span><span class="p">(</span><span class="n">trace</span><span class="p">,</span> <span class="n">gp</span><span class="p">,</span> <span class="n">xs</span><span class="p">,</span> <span class="n">n_samples</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">obs_noise</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">y</span><span class="p">,</span> <span class="s1">&#39;ko&#39;</span><span class="p">,</span> <span class="n">ms</span><span class="o">=</span><span class="mi">2</span><span class="p">);</span>
+<span class="n">xu</span> <span class="o">=</span> <span class="n">gp</span><span class="o">.</span><span class="n">distribution</span><span class="o">.</span><span class="n">Xu</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">xu</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="o">-</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">xu</span><span class="p">)),</span> <span class="s2">&quot;rx&quot;</span><span class="p">,</span> <span class="n">ms</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">xs</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">samples</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="s2">&quot;steelblue&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.2</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="s2">&quot;VFE&quot;</span><span class="p">);</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>100%|██████████| 20/20 [00:23&lt;00:00,  1.13s/it]
+</pre></div>
+
+
+<p><img alt="png" src="images/fitc-vfe_files/fitc-vfe_19_1.png" /></p>
+<p>Since the data input locations are fairly evenly spaced, K-means also spaces the inducing points evenly in the domain.</p>
+<h1>A larger data set</h1>
+<p>50 data points really isn't very much.  Estimating the posterior on the full GP didn't take that much longer than it did with VFE or FITC.  ADVI is slower than minimizing the marginal likelihood with L-BFGS-B or similar, which is what most GP software packages rely on.  This is why PyMC3 might feel slower than GPflow or scikit-learn.  </p>
+<p>In this example, we use 10000 data points, which is way more than an un-approximated GP could deal with in any reasonable amount of time.  </p>
+<div class="highlight"><pre><span></span><span class="n">nx</span> <span class="o">=</span> <span class="mi">10000</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">nx</span><span class="p">)</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">*</span> <span class="n">x</span> <span class="o">*</span> <span class="mf">2.5</span><span class="p">)</span> <span class="o">+</span> <span class="mf">0.3</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">nx</span><span class="p">)</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="s1">&#39;ko&#39;</span><span class="p">,</span> <span class="n">ms</span><span class="o">=</span><span class="mi">2</span><span class="p">);</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="p">[:,</span><span class="bp">None</span><span class="p">]</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/fitc-vfe_files/fitc-vfe_21_0.png" /></p>
+<p>It is easy to optimize the locations of the inducing points.</p>
+<div class="highlight"><pre><span></span><span class="c1"># bad start locations for inducing points</span>
+<span class="n">xu_init</span> <span class="o">=</span> <span class="o">-</span><span class="mf">0.1</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span> <span class="o">*</span> <span class="mf">0.5</span>
+
+<span class="k">with</span> <span class="n">pm</span><span class="o">.</span><span class="n">Model</span><span class="p">()</span> <span class="k">as</span> <span class="n">model</span><span class="p">:</span>
+    <span class="err">ℓ</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;ℓ&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">1.5</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
+    <span class="err">σ</span><span class="n">_f</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σ_f&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="err">σ</span><span class="n">_n</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σ_n&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="n">cov</span> <span class="o">=</span> <span class="n">tt</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="err">σ</span><span class="n">_f</span><span class="p">)</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Matern52</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="p">)</span>
+
+    <span class="n">xu</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s2">&quot;xu&quot;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="n">xu_init</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mf">2.0</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span> 
+    <span class="n">gp</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">GP</span><span class="p">(</span><span class="s2">&quot;gp&quot;</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">cov</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="err">σ</span><span class="n">_n</span><span class="p">,</span> <span class="n">inducing_points</span><span class="o">=</span><span class="n">xu</span><span class="p">[:,</span><span class="bp">None</span><span class="p">],</span> 
+                  <span class="n">approx</span><span class="o">=</span><span class="s2">&quot;vfe&quot;</span><span class="p">,</span> <span class="n">observed</span><span class="o">=</span><span class="n">y</span><span class="p">)</span>
+
+    <span class="n">start</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">find_MAP</span><span class="p">(</span><span class="n">fmin</span><span class="o">=</span><span class="n">sp</span><span class="o">.</span><span class="n">optimize</span><span class="o">.</span><span class="n">fmin_l_bfgs_b</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">xu_init</span><span class="p">,</span> <span class="o">-</span><span class="mf">0.1</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span> <span class="s1">&#39;bx&#39;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;before optimization&quot;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">start</span><span class="p">[</span><span class="s2">&quot;xu&quot;</span><span class="p">],</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span> <span class="s1">&#39;rx&#39;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="s2">&quot;Inducing point locations&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">legend</span><span class="p">();</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">ylim</span><span class="p">([</span><span class="o">-</span><span class="mf">0.25</span><span class="p">,</span> <span class="mf">0.25</span><span class="p">]);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/fitc-vfe_files/fitc-vfe_24_0.png" /></p>
+<p>Unfortunately, to use the inducing points we need to retype the model out, feeding the inducing point locations we found to the GP.  </p>
+<div class="highlight"><pre><span></span><span class="n">xu</span> <span class="o">=</span> <span class="n">start</span><span class="p">[</span><span class="s2">&quot;xu&quot;</span><span class="p">][:,</span><span class="bp">None</span><span class="p">]</span>
+<span class="k">with</span> <span class="n">pm</span><span class="o">.</span><span class="n">Model</span><span class="p">()</span> <span class="k">as</span> <span class="n">model</span><span class="p">:</span>
+    <span class="err">ℓ</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;ℓ&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">1.5</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
+    <span class="err">σ</span><span class="n">_f</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σ_f&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="err">σ</span><span class="n">_n</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σ_n&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="n">cov</span> <span class="o">=</span> <span class="n">tt</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="err">σ</span><span class="n">_f</span><span class="p">)</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Matern52</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="p">)</span>
+    <span class="n">gp</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">GP</span><span class="p">(</span><span class="s2">&quot;gp&quot;</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">cov</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="err">σ</span><span class="n">_n</span><span class="p">,</span> <span class="n">inducing_points</span><span class="o">=</span><span class="n">xu</span><span class="p">,</span> 
+                  <span class="n">approx</span><span class="o">=</span><span class="s2">&quot;vfe&quot;</span><span class="p">,</span> <span class="n">observed</span><span class="o">=</span><span class="n">y</span><span class="p">)</span>
+    <span class="n">trace</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span><span class="mi">1000</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>Auto-assigning NUTS sampler...
+Initializing NUTS using ADVI...
+Average Loss = 2,378.3:   9%|▉         | 18099/200000 [05:48&lt;1:16:01, 39.87it/s]
+Convergence archived at 18100
+Interrupted at 18,100 [9%]: Average Loss = 8,307.3
+100%|██████████| 1500/1500 [15:20&lt;00:00,  1.32it/s]
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">pm</span><span class="o">.</span><span class="n">traceplot</span><span class="p">(</span><span class="n">trace</span><span class="p">);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/fitc-vfe_files/fitc-vfe_27_0.png" /></p>
+<h3>Posterior sampling</h3>
+<div class="highlight"><pre><span></span><span class="n">xs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">1.1</span><span class="p">,</span> <span class="mi">50</span><span class="p">)[:,</span><span class="bp">None</span><span class="p">]</span>
+<span class="k">with</span> <span class="n">model</span><span class="p">:</span>
+    <span class="n">samples</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">sample_gp</span><span class="p">(</span><span class="n">trace</span><span class="p">,</span> <span class="n">gp</span><span class="p">,</span> <span class="n">xs</span><span class="p">,</span> <span class="n">n_samples</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">obs_noise</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">y</span><span class="p">,</span> <span class="s1">&#39;ko&#39;</span><span class="p">,</span> <span class="n">ms</span><span class="o">=</span><span class="mi">2</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">xs</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">samples</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="s2">&quot;steelblue&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.2</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">xu</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="o">-</span><span class="mi">2</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span> <span class="s1">&#39;rx&#39;</span><span class="p">);</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>100%|██████████| 20/20 [00:27&lt;00:00,  1.27s/it]
+</pre></div>
+
+
+<p><img alt="png" src="images/fitc-vfe_files/fitc-vfe_29_1.png" /></p>
+<script type="text/javascript">if (!document.getElementById('mathjaxscript_pelican_#%@#$@#')) {
+    var align = "center",
+        indent = "0em",
+        linebreak = "false";
+
+    if (false) {
+        align = (screen.width < 768) ? "left" : align;
+        indent = (screen.width < 768) ? "0em" : indent;
+        linebreak = (screen.width < 768) ? 'true' : linebreak;
+    }
+
+    var mathjaxscript = document.createElement('script');
+    mathjaxscript.id = 'mathjaxscript_pelican_#%@#$@#';
+    mathjaxscript.type = 'text/javascript';
+    mathjaxscript.src = 'https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.0/MathJax.js?config=TeX-AMS-MML_HTMLorMML';
+    mathjaxscript[(window.opera ? "innerHTML" : "text")] =
+        "MathJax.Hub.Config({" +
+        "    config: ['MMLorHTML.js']," +
+        "    TeX: { extensions: ['AMSmath.js','AMSsymbols.js','noErrors.js','noUndefined.js'], equationNumbers: { autoNumber: 'AMS' } }," +
+        "    jax: ['input/TeX','input/MathML','output/HTML-CSS']," +
+        "    extensions: ['tex2jax.js','mml2jax.js','MathMenu.js','MathZoom.js']," +
+        "    displayAlign: '"+ align +"'," +
+        "    displayIndent: '"+ indent +"'," +
+        "    showMathMenu: true," +
+        "    messageStyle: 'normal'," +
+        "    tex2jax: { " +
+        "        inlineMath: [ ['\\\\(','\\\\)'] ], " +
+        "        displayMath: [ ['$$','$$'] ]," +
+        "        processEscapes: true," +
+        "        preview: 'TeX'," +
+        "    }, " +
+        "    'HTML-CSS': { " +
+        "        styles: { '.MathJax_Display, .MathJax .mo, .MathJax .mi, .MathJax .mn': {color: 'inherit ! important'} }," +
+        "        linebreaks: { automatic: "+ linebreak +", width: '90% container' }," +
+        "    }, " +
+        "}); " +
+        "if ('default' !== 'default') {" +
+            "MathJax.Hub.Register.StartupHook('HTML-CSS Jax Ready',function () {" +
+                "var VARIANT = MathJax.OutputJax['HTML-CSS'].FONTDATA.VARIANT;" +
+                "VARIANT['normal'].fonts.unshift('MathJax_default');" +
+                "VARIANT['bold'].fonts.unshift('MathJax_default-bold');" +
+                "VARIANT['italic'].fonts.unshift('MathJax_default-italic');" +
+                "VARIANT['-tex-mathit'].fonts.unshift('MathJax_default-italic');" +
+            "});" +
+            "MathJax.Hub.Register.StartupHook('SVG Jax Ready',function () {" +
+                "var VARIANT = MathJax.OutputJax.SVG.FONTDATA.VARIANT;" +
+                "VARIANT['normal'].fonts.unshift('MathJax_default');" +
+                "VARIANT['bold'].fonts.unshift('MathJax_default-bold');" +
+                "VARIANT['italic'].fonts.unshift('MathJax_default-italic');" +
+                "VARIANT['-tex-mathit'].fonts.unshift('MathJax_default-italic');" +
+            "});" +
+        "}";
+    (document.body || document.getElementsByTagName('head')[0]).appendChild(mathjaxscript);
+}
+</script>
+      </div>
+<!-- /.entry-content -->
+      <footer class="post-info text-muted">
+        <button type="button" class="btn btn-default">          
+          <a href="https://bwengals.github.io/category/posts.html"><div class="fa fa-lg fa-folder-open"></div> posts</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gp.html"><div class="fa fa-lg fa-tag"></div> gp</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gsoc.html"><div class="fa fa-lg fa-tag"></div> gsoc</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gp-approximations.html"><div class="fa fa-lg fa-tag"></div> gp-approximations</a>
+        </button>
+      </footer>
+      <!-- /.post-info -->
+    </section>
+    </div>
+    <footer class="footer">
+      <div class="container">
+        <p class="footer-text">&copy; <a href="https://bwengals.github.io">Bill Engels</a> powered by <a href="http://getpelican.com/">pelican</a></p>
+      </div>
+    </footer>
+    <script src="//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+    <script src="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script>
+  </body>
+</html>

@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+  
+
+    <meta name="tags" content="gp" />
+    <meta name="tags" content="gsoc" />
+    <meta name="tags" content="gp-approximations" />
+
+    <title>Speeding up GPs with special kernel matrix structure - posts</title>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <link href="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="//maxcdn.bootstrapcdn.com/font-awesome/4.2.0/css/font-awesome.min.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/style.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/notebooks.css" rel="stylesheet" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+  <body id="index" class="archive">
+    <!--[if lt IE 7]>
+        <p class="browsehappy">You are using an <strong>outdated</strong> browser. Please <a href="http://browsehappy.com/">upgrade your browser</a> to improve your experience.</p>
+    <![endif]-->
+    <nav class="navbar navbar-default" role="navigation">
+      <div class="container">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target=".navbar-collapse">
+          <span class="sr-only">Toggle navigation</span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          </button>
+          <a class="navbar-brand" href="https://bwengals.github.io">Bill Engels</a>
+        </div>
+        <div class="collapse navbar-collapse navbar-right">
+          <ul class="nav navbar-nav">
+            <li><a href="https://bwengals.github.io/tags.html">tags</a></li>
+          </ul>
+        </div>
+        <!-- /.navbar-collapse -->
+      </div>
+    </nav>
+    <div class="container">
+    <section id="content" class="body">
+      <header>
+        <h1 class="entry-title">
+          Speeding up GPs with special kernel matrix structure
+        </h1>
+        
+        <div class="text-muted">Mon 29 May 2017</div>
+      </header>
+<!-- .entry-content -->
+      <div class="article_content">
+        <p>Linear algebra tricks to speed up GPs</p>
+
+
+<p>The goal of PyMC3 is to be able to flexibly define Bayesian models.  So, we don't want to restrict users to the case where the GP prior is conjugate to the likelihood.  It should be easy to use non-conjugate likelihoods.  I think any tricks we might employ should be visible to the user and optional with a smart way of choosing defaults.  Each could be turned on by setting a flag.  </p>
+<h1>Speeding up Computation</h1>
+<p>The computational complexity of the Cholesky decomposition is <span class="math">\(\mathcal{O}(n^3)\)</span>, where <span class="math">\(n\)</span> is the number of rows or columns of the matrix being decomposed (and so the number of data points).  For PyMC3, Theano also needs to be able to compute the gradient.   </p>
+<p>The three main ways that I've been able to find in the literature of reducing the <span class="math">\(\mathcal{O}(n^3)\)</span> complexity from the Cholesky decomposition can be summarized very roughly as:</p>
+<ol>
+<li>Exploit special structure in the matrix <span class="math">\(K\)</span> with specialized linear algebra algorithms</li>
+<li>Make <span class="math">\(K\)</span> effectively smaller ("inducing point methods")</li>
+<li>Variational methods (not discussed here, I'm still reading!)</li>
+</ol>
+<p>This post is about 1.</p>
+<hr />
+<h2>Exploiting Matrix Structure</h2>
+<p>The first set of methods exploits structure in the covariance matrix (or kernel) to speed up the solve operation.  Depending on the problem, these methods can be combined.</p>
+<div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pymc3</span> <span class="kn">as</span> <span class="nn">pm</span>
+<span class="kn">import</span> <span class="nn">theano</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="kn">as</span> <span class="nn">plt</span>
+<span class="o">%</span><span class="n">matplotlib</span> <span class="n">inline</span>
+</pre></div>
+
+
+<h3>Toeplitz structure</h3>
+<p>Each diagonal of a Toeplitz matrix is constant.  For instance, the following matrix is Toeplitz:</p>
+<div class="math">$$
+A = \begin{bmatrix}
+a &amp; b &amp; c &amp; d &amp; e \\
+f &amp; a &amp; b &amp; c &amp; d \\
+g &amp; f &amp; a &amp; b &amp; c \\
+h &amp; g &amp; f &amp; a &amp; b \\
+i &amp; h &amp; g &amp; f &amp; a 
+\end{bmatrix}
+$$</div>
+<p>If a stationary covariance matrix is used, such as the Matern and Exponentiated Quadratic, and the inputs <code>X</code> are evenly spaced and one dimensional, then the resulting covariance matrix has Toeplitz structure.  An example of a covariance matrix with Toeplitz structure is shown below.</p>
+<div class="highlight"><pre><span></span><span class="n">X</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">50</span><span class="p">)[:,</span><span class="bp">None</span><span class="p">]</span>
+<span class="c1"># define and evaluate covariance function</span>
+<span class="n">K</span> <span class="o">=</span> <span class="n">theano</span><span class="o">.</span><span class="n">function</span><span class="p">([],</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Matern32</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">)(</span><span class="n">X</span><span class="p">))()</span>
+
+<span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span><span class="mi">8</span><span class="p">))</span><span class="o">.</span><span class="n">add_subplot</span><span class="p">(</span><span class="mi">111</span><span class="p">)</span>
+<span class="n">m</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s2">&quot;inferno&quot;</span><span class="p">,</span>
+              <span class="n">interpolation</span><span class="o">=</span><span class="s1">&#39;none&#39;</span><span class="p">,</span>
+              <span class="n">extent</span><span class="o">=</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">min</span><span class="p">(</span><span class="n">X</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">X</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">X</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">min</span><span class="p">(</span><span class="n">X</span><span class="p">)));</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/gp-speedups-2_files/gp-speedups-2_5_0.png" /></p>
+<p>To include this in PyMC3 would require a new Op and gradient to be implemented (eventually, preferably) in Theano. This may also benefit some time series methods. </p>
+<h5>References</h5>
+<ul>
+<li><a href="https://arxiv.org/abs/1503.01057">KISS-GP</a></li>
+<li><a href="http://icml2008.cs.helsinki.fi/papers/151.pdf">Cunningham et al.</a></li>
+<li><a href="http://www.math.niu.edu/~ammar/cortona/node3.html">Fast Cholesky Factorization</a></li>
+</ul>
+<h3>Kronecker Structure</h3>
+<p>It may be possible to exploit Kronecker structure if the number of <span class="math">\(X\)</span> dimensions is greater than 1.</p>
+<p>The product of two covariance functions is also a covariance function, even if the inputs are over different spaces.  For example, in the two dimensional case, <span class="math">\(k = k_1(x_1, x_1') k_2(x_2 , x_2')\)</span> is a valid covariance function.  If the number of <span class="math">\(x_1\)</span> data points is <span class="math">\(n_1\)</span>, and the number of <span class="math">\(x_2\)</span> data points is <span class="math">\(n_2\)</span>, then the dimension of the <span class="math">\(k\)</span> <strong>matrix</strong> will be <span class="math">\(n_1 n_2 \times n_1 n_2\)</span> (large!).</p>
+<p>Fortunately, the matrix <span class="math">\(K\)</span> can be written in terms of a Kronecker product, <span class="math">\(K = K_1 \otimes K_2\)</span>, and the inverse of a Kronecker product is equal to the Kronecker product of the inverses, <span class="math">\(K^{-1} = K_1^{-1} \otimes K_2^{-1}\)</span>.  </p>
+<p>For example, in a two dimensional scenario, this reduces complexity from <span class="math">\(\mathcal{O}((n_1 n_2)^3)\)</span> to the much faster <span class="math">\(\mathcal{O}(n_1^3) + \mathcal{O}(n_2^3)\)</span>.</p>
+<p>The full matrix <span class="math">\(K\)</span> has an apparent blocked structure, as shown below.</p>
+<div class="highlight"><pre><span></span><span class="n">x1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">10</span><span class="p">)[:,</span><span class="bp">None</span><span class="p">]</span>
+<span class="n">K1</span> <span class="o">=</span> <span class="n">theano</span><span class="o">.</span><span class="n">function</span><span class="p">([],</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Matern32</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">)(</span><span class="n">x1</span><span class="p">))()</span>
+
+<span class="n">A</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]])</span>
+<span class="n">K</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">kron</span><span class="p">(</span><span class="n">A</span><span class="p">,</span> <span class="n">K1</span><span class="p">)</span>
+
+<span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span><span class="mi">8</span><span class="p">))</span><span class="o">.</span><span class="n">add_subplot</span><span class="p">(</span><span class="mi">111</span><span class="p">)</span>
+<span class="n">m</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s2">&quot;inferno&quot;</span><span class="p">,</span>
+              <span class="n">interpolation</span><span class="o">=</span><span class="s1">&#39;none&#39;</span><span class="p">)</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/gp-speedups-2_files/gp-speedups-2_8_0.png" /></p>
+<p><span class="math">\(K = K_1 \otimes K_2\)</span> has no diagonal noise term.  If we add a diagonal noise term, <span class="math">\(K' = K_1 \otimes K_2 + \sigma^2 I\)</span>, then the <code>eigh</code> routine can be used instead of the Cholesky to decompose individual matrices instead of the Cholesky, and the speedup is still obtained.</p>
+<p>I think an implementation in PyMC3 would be best done within the <code>GP</code> class.  If the <code>cov_func</code> argument was given a list of covariance matrices and a list of inputs, the <code>GP</code> class would be able to sort it out.  For instance, something like</p>
+<div class="highlight"><pre><span></span>gp = pm.gp.GP(&#39;gp&#39;, cov_func=[k1, k2, k3], inputs=[x1, x2, x3])
+</pre></div>
+
+
+<p>might work.</p>
+<h5>References</h5>
+<ul>
+<li><a href="https://pdfs.semanticscholar.org/e08f/8db209278eabd13a6b9966e14d10c924b704.pdf">Saatchi Thesis</a></li>
+<li>KISS-GP</li>
+<li><a href="http://sethrf.com/files/fast-hierarchical-GPs.pdf">Fast Hierarchical GPs</a></li>
+<li><a href="https://papers.nips.cc/paper/4281-efficient-inference-in-matrix-variate-gaussian-models-with-iid-observation-noise">Efficient Infernce in Matrix-variate ...</a></li>
+</ul>
+<h3>The HODLR solver</h3>
+<p>Many common covariance functions produce hierarchical off-diagonal low-rank (HODLR) covariance matrices, pictured below.  The HODLR solver can be applied to speed up inversion and determinant computation to <span class="math">\(\mathcal{O}(n log{}^2 n)\)</span> time.  The algorithm can be applied in a black-box fashion, and works best on lower dimensional problems where <span class="math">\(d &lt; 3\)</span>.  Periodic covariances, for instance, are not HODLR.</p>
+<p>A low rank matrix is one with small eigenvalues that can be approximated as
+</p>
+<div class="math">$$
+K \approx Q_{n \times p} D_{p \times p} Q^T_{p \times n}
+$$</div>
+<p>
+with <span class="math">\(p &lt; n\)</span>.  </p>
+<p>The HODLR solver uses fast low rank factorizations of off diagonal blocks, and usual full rank solvers for diagonal blocks.</p>
+<p>Below shows that the <code>Matern32</code> covariance is HODLR.  The GP library George contains bindings to the HODLR solver.</p>
+<div class="highlight"><pre><span></span><span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">100</span><span class="p">)[:,</span><span class="bp">None</span><span class="p">]</span>
+<span class="n">K</span> <span class="o">=</span> <span class="n">theano</span><span class="o">.</span><span class="n">function</span><span class="p">([],</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Matern32</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">)(</span><span class="n">x</span><span class="p">))()</span>
+<span class="n">tol</span> <span class="o">=</span> <span class="mf">1e-6</span>
+
+<span class="n">fig</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span><span class="mi">5</span><span class="p">))</span>
+<span class="n">ax1</span> <span class="o">=</span> <span class="n">fig</span><span class="o">.</span><span class="n">add_subplot</span><span class="p">(</span><span class="mi">131</span><span class="p">)</span>
+<span class="n">ax2</span> <span class="o">=</span> <span class="n">fig</span><span class="o">.</span><span class="n">add_subplot</span><span class="p">(</span><span class="mi">132</span><span class="p">)</span>
+<span class="n">ax3</span> <span class="o">=</span> <span class="n">fig</span><span class="o">.</span><span class="n">add_subplot</span><span class="p">(</span><span class="mi">133</span><span class="p">)</span>
+<span class="n">ax1</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s2">&quot;inferno&quot;</span><span class="p">,</span>
+           <span class="n">interpolation</span><span class="o">=</span><span class="s1">&#39;none&#39;</span><span class="p">)</span>
+<span class="n">ax2</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">K</span><span class="p">[:</span><span class="mi">50</span><span class="p">,:</span><span class="mi">50</span><span class="p">],</span> <span class="n">cmap</span><span class="o">=</span><span class="s2">&quot;inferno&quot;</span><span class="p">,</span>
+           <span class="n">interpolation</span><span class="o">=</span><span class="s1">&#39;none&#39;</span><span class="p">)</span>
+<span class="n">ax3</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">K</span><span class="p">[</span><span class="mi">50</span><span class="p">:,:</span><span class="mi">50</span><span class="p">],</span> <span class="n">cmap</span><span class="o">=</span><span class="s2">&quot;inferno&quot;</span><span class="p">,</span>
+           <span class="n">interpolation</span><span class="o">=</span><span class="s1">&#39;none&#39;</span><span class="p">)</span>
+<span class="n">ax1</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;K&quot;</span><span class="p">);</span> <span class="n">ax2</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;upper left block&quot;</span><span class="p">);</span> <span class="n">ax3</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;lower left block&quot;</span><span class="p">)</span>
+
+<span class="k">print</span><span class="p">(</span><span class="s2">&quot;Rank of K:&quot;</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">matrix_rank</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">tol</span><span class="o">=</span><span class="n">tol</span><span class="p">))</span>
+<span class="k">print</span><span class="p">(</span><span class="s2">&quot;Rank of upper left block:&quot;</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">matrix_rank</span><span class="p">(</span><span class="n">K</span><span class="p">[:</span><span class="mi">50</span><span class="p">,:</span><span class="mi">50</span><span class="p">],</span> <span class="n">tol</span><span class="p">))</span>
+<span class="k">print</span><span class="p">(</span><span class="s2">&quot;Rank of lower left block:&quot;</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">matrix_rank</span><span class="p">(</span><span class="n">K</span><span class="p">[</span><span class="mi">50</span><span class="p">:,:</span><span class="mi">50</span><span class="p">],</span> <span class="n">tol</span><span class="p">))</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>Rank of K: 100
+Rank of upper left block: 50
+Rank of lower left block: 2
+</pre></div>
+
+
+<p><img alt="png" src="images/gp-speedups-2_files/gp-speedups-2_11_1.png" /></p>
+<p>To include in PyMC3, a HODLR solver Op would need to be added to either PyMC3 or Theano.  I'm not sure how the gradient implementation would work here, depending on the details I could see this potentially being a little tricky.</p>
+<h5>References</h5>
+<ul>
+<li><a href="https://arxiv.org/pdf/1403.6015.pdf">HODLR solver paper</a></li>
+<li><a href="https://github.com/sivaramambikasaran/HODLR">HODLR solver code</a></li>
+<li><a href="http://dan.iel.fm/george/current/">George</a></li>
+</ul>
+<h3>Covariance functions with compact support</h3>
+<p>If the data being fit doesn't exhibit long-distance correlations, then many elements in the covariance matrix will be near zero.  If the matrix were actually sparse, then linear algebra routines could be applied for computational gains. Simply zeroing out these small values won't in general produce a matrix that is positive definite.  </p>
+<p>Some kernels have compact support, and so will yield covariance matrices that are sparse when, for example, the domain of the data is large and the function being fit is high frequency or has a small lengthscale.  Including covariance function(s) with compact support should be pretty straightforward in PyMC3.</p>
+<h5>References:</h5>
+<ul>
+<li><a href="https://www.amazon.com/Scattered-Approximation-Monographs-Computational-Mathematics/dp/0521843359">Scattered Data Approximation, Wendland (ch 9)</a></li>
+<li><a href="http://www.math.iit.edu/~fass/603_ch4.pdf">book chapter</a></li>
+</ul>
+<hr />
+<h2>Next ...</h2>
+<p>There are other approaches out there.  I plan on adding them as I come across them.  The next post is about point number two, inducing point methods.  </p>
+<script type="text/javascript">if (!document.getElementById('mathjaxscript_pelican_#%@#$@#')) {
+    var align = "center",
+        indent = "0em",
+        linebreak = "false";
+
+    if (false) {
+        align = (screen.width < 768) ? "left" : align;
+        indent = (screen.width < 768) ? "0em" : indent;
+        linebreak = (screen.width < 768) ? 'true' : linebreak;
+    }
+
+    var mathjaxscript = document.createElement('script');
+    mathjaxscript.id = 'mathjaxscript_pelican_#%@#$@#';
+    mathjaxscript.type = 'text/javascript';
+    mathjaxscript.src = 'https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.0/MathJax.js?config=TeX-AMS-MML_HTMLorMML';
+    mathjaxscript[(window.opera ? "innerHTML" : "text")] =
+        "MathJax.Hub.Config({" +
+        "    config: ['MMLorHTML.js']," +
+        "    TeX: { extensions: ['AMSmath.js','AMSsymbols.js','noErrors.js','noUndefined.js'], equationNumbers: { autoNumber: 'AMS' } }," +
+        "    jax: ['input/TeX','input/MathML','output/HTML-CSS']," +
+        "    extensions: ['tex2jax.js','mml2jax.js','MathMenu.js','MathZoom.js']," +
+        "    displayAlign: '"+ align +"'," +
+        "    displayIndent: '"+ indent +"'," +
+        "    showMathMenu: true," +
+        "    messageStyle: 'normal'," +
+        "    tex2jax: { " +
+        "        inlineMath: [ ['\\\\(','\\\\)'] ], " +
+        "        displayMath: [ ['$$','$$'] ]," +
+        "        processEscapes: true," +
+        "        preview: 'TeX'," +
+        "    }, " +
+        "    'HTML-CSS': { " +
+        "        styles: { '.MathJax_Display, .MathJax .mo, .MathJax .mi, .MathJax .mn': {color: 'inherit ! important'} }," +
+        "        linebreaks: { automatic: "+ linebreak +", width: '90% container' }," +
+        "    }, " +
+        "}); " +
+        "if ('default' !== 'default') {" +
+            "MathJax.Hub.Register.StartupHook('HTML-CSS Jax Ready',function () {" +
+                "var VARIANT = MathJax.OutputJax['HTML-CSS'].FONTDATA.VARIANT;" +
+                "VARIANT['normal'].fonts.unshift('MathJax_default');" +
+                "VARIANT['bold'].fonts.unshift('MathJax_default-bold');" +
+                "VARIANT['italic'].fonts.unshift('MathJax_default-italic');" +
+                "VARIANT['-tex-mathit'].fonts.unshift('MathJax_default-italic');" +
+            "});" +
+            "MathJax.Hub.Register.StartupHook('SVG Jax Ready',function () {" +
+                "var VARIANT = MathJax.OutputJax.SVG.FONTDATA.VARIANT;" +
+                "VARIANT['normal'].fonts.unshift('MathJax_default');" +
+                "VARIANT['bold'].fonts.unshift('MathJax_default-bold');" +
+                "VARIANT['italic'].fonts.unshift('MathJax_default-italic');" +
+                "VARIANT['-tex-mathit'].fonts.unshift('MathJax_default-italic');" +
+            "});" +
+        "}";
+    (document.body || document.getElementsByTagName('head')[0]).appendChild(mathjaxscript);
+}
+</script>
+      </div>
+<!-- /.entry-content -->
+      <footer class="post-info text-muted">
+        <button type="button" class="btn btn-default">          
+          <a href="https://bwengals.github.io/category/posts.html"><div class="fa fa-lg fa-folder-open"></div> posts</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gp.html"><div class="fa fa-lg fa-tag"></div> gp</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gsoc.html"><div class="fa fa-lg fa-tag"></div> gsoc</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gp-approximations.html"><div class="fa fa-lg fa-tag"></div> gp-approximations</a>
+        </button>
+      </footer>
+      <!-- /.post-info -->
+    </section>
+    </div>
+    <footer class="footer">
+      <div class="container">
+        <p class="footer-text">&copy; <a href="https://bwengals.github.io">Bill Engels</a> powered by <a href="http://getpelican.com/">pelican</a></p>
+      </div>
+    </footer>
+    <script src="//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+    <script src="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script>
+  </body>
+</html>

@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+  
+
+    <meta name="tags" content="math" />
+    <meta name="tags" content="gp" />
+
+    <title>VFE approximation for Gaussian processes, the gory details - posts</title>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <link href="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="//maxcdn.bootstrapcdn.com/font-awesome/4.2.0/css/font-awesome.min.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/style.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/notebooks.css" rel="stylesheet" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+  <body id="index" class="archive">
+    <!--[if lt IE 7]>
+        <p class="browsehappy">You are using an <strong>outdated</strong> browser. Please <a href="http://browsehappy.com/">upgrade your browser</a> to improve your experience.</p>
+    <![endif]-->
+    <nav class="navbar navbar-default" role="navigation">
+      <div class="container">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target=".navbar-collapse">
+          <span class="sr-only">Toggle navigation</span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          </button>
+          <a class="navbar-brand" href="https://bwengals.github.io">Bill Engels</a>
+        </div>
+        <div class="collapse navbar-collapse navbar-right">
+          <ul class="nav navbar-nav">
+            <li><a href="https://bwengals.github.io/tags.html">tags</a></li>
+          </ul>
+        </div>
+        <!-- /.navbar-collapse -->
+      </div>
+    </nav>
+    <div class="container">
+    <section id="content" class="body">
+      <header>
+        <h1 class="entry-title">
+          VFE approximation for Gaussian processes, the gory details
+        </h1>
+        
+        <div class="text-muted">Mon 20 August 2018</div>
+      </header>
+<!-- .entry-content -->
+      <div class="article_content">
+        <p>This post gives the VFE Gaussian process derivation in detail.  The implementation details are given in another post.</p>
+<p><span class="math">\(\newcommand{\X}{\mathbf{X}}\)</span>
+<span class="math">\(\newcommand{\Z}{\mathbf{Z}}\)</span>
+<span class="math">\(\newcommand{\W}{\mathbf{W}}\)</span>
+<span class="math">\(\newcommand{\Wt}{\mathbf{W}^T}\)</span>
+<span class="math">\(\newcommand{\M}{\mathbf{M}}\)</span>
+<span class="math">\(\renewcommand{\S}{\mathbf{S}}\)</span>
+<span class="math">\(\newcommand{\Minv}{\mathbf{M}^{-1}}\)</span>
+<span class="math">\(\newcommand{\U}{\mathbf{U}}\)</span>
+<span class="math">\(\newcommand{\Vt}{\mathbf{V}^T}\)</span>
+<span class="math">\(\newcommand{\I}{\mathbf{I}}\)</span>
+<span class="math">\(\newcommand{\C}{\mathbf{C}}\)</span>
+<span class="math">\(\renewcommand{\L}{\mathbf{L}}\)</span>
+<span class="math">\(\newcommand{\Sig}{\boldsymbol{\Sigma}}\)</span>
+<span class="math">\(\newcommand{\A}{\mathbf{A}}\)</span>
+<span class="math">\(\newcommand{\T}{\mathbf{T}}\)</span>
+<span class="math">\(\newcommand{\G}{\mathbf{G}}\)</span>
+<span class="math">\(\newcommand{\R}{\mathbf{R}}\)</span>
+<span class="math">\(\newcommand{\Linv}{\mathbf{L}^{-1}}\)</span>
+<span class="math">\(\newcommand{\K}{\mathbf{K}}\)</span>
+<span class="math">\(\newcommand{\Kxx}{\mathbf{K}_{xx}}\)</span>
+<span class="math">\(\newcommand{\Kxs}{\mathbf{K}_{x*}}\)</span>
+<span class="math">\(\newcommand{\Ksx}{\mathbf{K}_{*x}}\)</span>
+<span class="math">\(\newcommand{\Kss}{\mathbf{K}_{**}}\)</span>
+<span class="math">\(\newcommand{\Kzs}{\mathbf{K}_{z*}}\)</span>
+<span class="math">\(\newcommand{\Ksz}{\mathbf{K}_{*z}}\)</span>
+<span class="math">\(\newcommand{\Kzz}{\mathbf{K}_{zz}}\)</span>
+<span class="math">\(\newcommand{\Kxz}{\mathbf{K}_{xz}}\)</span>
+<span class="math">\(\newcommand{\Kzx}{\mathbf{K}_{zx}}\)</span>
+<span class="math">\(\newcommand{\Kzzinv}{\mathbf{K}_{zz}^{-1}}\)</span>
+<span class="math">\(\newcommand{\Qxx}{\mathbf{Q}_{xx}}\)</span>
+<span class="math">\(\newcommand{\Qxs}{\mathbf{Q}_{x*}}\)</span>
+<span class="math">\(\newcommand{\Qsx}{\mathbf{Q}_{*x}}\)</span>
+<span class="math">\(\newcommand{\Qsz}{\mathbf{Q}_{*z}}\)</span>
+<span class="math">\(\newcommand{\Qzs}{\mathbf{Q}_{z*}}\)</span>
+<span class="math">\(\newcommand{\yv}{\mathbf{y}}\)</span>
+<span class="math">\(\newcommand{\xv}{\mathbf{x}}\)</span>
+<span class="math">\(\newcommand{\sv}{\mathbf{s}}\)</span>
+<span class="math">\(\newcommand{\bv}{\mathbf{b}}\)</span>
+<span class="math">\(\newcommand{\mv}{\mathbf{m}}\)</span>
+<span class="math">\(\newcommand{\ev}{\mathbf{e}}\)</span>
+<span class="math">\(\newcommand{\tv}{\mathbf{t}}\)</span>
+<span class="math">\(\newcommand{\zv}{\mathbf{z}}\)</span>
+<span class="math">\(\newcommand{\uv}{\mathbf{u}}\)</span>
+<span class="math">\(\newcommand{\fv}{\mathbf{f}}\)</span>
+<span class="math">\(\newcommand{\fvx}{\mathbf{f}_x}\)</span>
+<span class="math">\(\newcommand{\fvs}{\mathbf{f}_*}\)</span>
+<span class="math">\(\newcommand{\fvz}{\mathbf{f}_z}\)</span>
+<span class="math">\(\newcommand{\fvxzbar}{\bar{\mathbf{f}}_{xz}}\)</span>
+<span class="math">\(\newcommand{\xvs}{\mathbf{x}_*}\)</span>
+<span class="math">\(\newcommand{\epsv}{\boldsymbol\epsilon}\)</span>
+<span class="math">\(\newcommand{\muv}{\boldsymbol\mu}\)</span>
+<span class="math">\(\newcommand{\bzero}{\mathbf{0}}\)</span>
+<span class="math">\(\newcommand{\normal}[3]{\mathcal{N}\left(#1 \mid #2 \,,\, #3\right)}\)</span>
+<span class="math">\(\newcommand{\KL}[2]{\mathrm{KL}\left[\, #1 \, || \, #2 \, \right]}\)</span>
+<span class="math">\(\newcommand{\Exp}[2]{\mathbb{E}_{#1}\left[#2\right]}\)</span>
+<span class="math">\(\newcommand{\Tr}[1]{\text{Tr}\left[ #1 \right]}\)</span>
+<span class="math">\(\newcommand{\Cov}[1]{\mathbb{C}\text{ov}\left[ #1 \right]}\)</span></p>
+<p>Throughout, we consider the covariance or mean function hyperparameters
+<span class="math">\(\theta\)</span> to be conditioned on implicitly, unless stated otherwise.</p>
+<div class="math">$$
+\begin{aligned}
+p(\fvx)           &amp;= \normal{\fvx}{\bzero}{\Kxx}  \\
+p(\yv \mid \fvx)  &amp;= \normal{\yv}{\fvx}{\sigma^2 \I} \\
+p(\fvx \mid \yv)  &amp;= \normal{\fvx}{\Kxx [\Kxx + \sigma^2 \I]^{-1} \yv}{\Kxx - \Kxx [\Kxx + \sigma^2 \I]^{-1} \Kxx} \\
+p(\fvs \mid \yv)  &amp;= \normal{\fvs}{\Ksx [\Kxx + \sigma^2 \I]^{-1} \yv}{\Kxx - \Ksx [\Kxx + \sigma^2 \I]^{-1} \Kxs} \\
+p(\fvs \mid \fvx) &amp;= \normal{\fvs}{\Ksx \Kxx^{-1} \yv}{\Kxx - \Ksx \Kxx^{-1} \Kxs} \\
+\end{aligned}
+$$</div>
+<p>The derivation starts with the equation for the GP predictive distribution,
+<span class="math">\(p(\fvs \mid \yv)\)</span>.  First write it as the marginal distribution of the joint
+<span class="math">\(p(\fvs, \fvx \mid \yv)\)</span>,
+</p>
+<div class="math">\begin{align*}
+p(\fvs \mid \yv) &amp;= \int p(\fvs, \fvx \mid \yv) d\fvx \\
+                 &amp;= \int p(\fvs \mid \fvx, \cancel{\yv}) p(\fvx \mid \yv) d\fvx \\
+                 &amp;= \int p(\fvs \mid \fvx) p(\fvx \mid \yv) d\fvx \,.
+\end{align*}</div>
+<p>
+First we factor the joint distribution, then cancel <span class="math">\(\yv\)</span>, since <span class="math">\(\yv\)</span> and
+<span class="math">\(\fvx\)</span> contain the same information on <span class="math">\(\fvs\)</span>.  Both the distributions in the
+integrand are known.</p>
+<p>The VFE approximation begins by applying a variational approximation to <span class="math">\(p(\fvx, \fvz \mid \yv)\)</span>,
+which we denote <span class="math">\(p(\fvx, \fvz)\)</span>,
+</p>
+<div class="math">\begin{equation}\label{eq:gpcond}
+\tilde{p}(\fvs \mid \yv) = \iint p(\fvs \mid \fvx, \fvz) q(\fvx, \fvz) d\fvz d\fvx \,. 
+\end{equation}</div>
+<p>
+The tilde denotes that the distribution is an approximation.  This approximation
+is exact when the Kullback-Leibler divergence (KL) is equal to zero,
+</p>
+<div class="math">\begin{equation}
+\text{If}\hspace{2mm} 
+\KL{q(\fvx, \fvz)}{p(\fvx, \fvz \mid \yv)} = 0\,, \hspace{1mm} \text{then} \hspace{2mm}
+q(\fvx, \fvz) = p(\fvx, \fvz \mid \yv)
+\end{equation}</div>
+<p>
+The larger the KL is, the worse the approximation becomes.  We choose to factor
+the variational posterior as<br />
+</p>
+<div class="math">\begin{align}
+q(\fvx, \fvz) &amp;= q(\fvx \mid \fvz) q(\fvz) \\
+              &amp;= p(\fvx \mid \fvz) q(\fvz)  \,. 
+\end{align}</div>
+<p>
+We choose to use <span class="math">\(p(\fvx \mid \fvz)\)</span> for <span class="math">\(q(\fvx \mid \fvz)\)</span>, which is known.
+Then we choose a multivariate normal with unknown mean and variance for 
+<span class="math">\(q(\fvz) = \normal{\fvz}{\boldsymbol\mu}{\mathbf{A}}\)</span>.  After we rearranging
+the KL divergence and simplifying, we will find values for <span class="math">\(\boldsymbol\mu\)</span> and 
+<span class="math">\(\mathbf{A}\)</span> that minimize the KL divergence.  So, our goal is to find
+</p>
+<div class="math">\begin{equation}
+  \argmin_{q, \zv} \KL{q(\fvx, \fvz)}{p(\fvx, \fvz \mid \yv)} \,.
+\end{equation}</div>
+<p>
+We want to find both the inducing point locations <span class="math">\(\zv\)</span>, and the mean and 
+covariance of the variational distribution <span class="math">\(q(\fvz)\)</span> which minimize the KL
+divergence.</p>
+<p>Next, we expand and then simplify the expression for this KL divergence,
+</p>
+<div class="math">\begin{align}
+ \KL{q(\fvx, \fvz)}{p(\fvx, \fvz \mid \yv)} 
+   &amp;= \Exp{q(\fvx, \fvz}{\log \frac{q(\fvx, \fvz)}{p(\fvx, \fvz \mid \yv}} \\
+   &amp;= \Exp{q(\fvx, \fvz}{\log q(\fvx, \fvz) } - \Exp{q(\fvx, \fvz)}{\log p(\fvx, \fvz \mid \yv)} \\
+   &amp;= \Exp{q(\fvx, \fvz}{\log q(\fvx, \fvz) } - \Exp{q(\fvx, \fvz)}{\log \frac{p(\fvx, \fvz, \yv)}{p(\yv)}} \\
+   &amp;= \Exp{q(\fvx, \fvz}{\log q(\fvx, \fvz) } - \Exp{q(\fvx, \fvz)}{\log p(\fvx, \fvz, \yv)} + \log p(\yv)  \,. 
+\end{align}</div>
+<p>
+Next, we rearrange to have <span class="math">\(\log p(\yv)\)</span> on the left hand side,
+</p>
+<div class="math">\begin{align}
+  \log p(\yv) &amp;= \Exp{q(\fvx, \fvz)}{\log p(\fvx, \fvz, \yv)} - \Exp{q(\fvx, \fvz)}{\log q(\fvx, \fvz) }
+               + \KL{q(\fvx, \fvz)}{p(\fvx, \fvz \mid \yv)}  \\
+              &amp;\geq \Exp{q(\fvx, \fvz)}{\log p(\fvx, \fvz, \yv)} - \Exp{q(\fvx, \fvz)}{\log q(\fvx, \fvz) }
+\end{align}</div>
+<p>
+Since the KL divergence is greater than or equal to zero, we find an expression
+for the lower bound of the marginal log-likelihood, <span class="math">\(\log p(\yv)\)</span>.  The
+expression on the right-hand side is the evidence lower bound (ELBO).  Then we can simplify further,
+</p>
+<div class="math">\begin{align}
+  \log p(\yv) &amp;\geq \Exp{q(\fvx, \fvz)}{\log p(\fvx, \fvz, \yv)} - \Exp{q(\fvx, \fvz) }{\log q(\fvx, \fvz) } \\
+              &amp;\geq \Exp{q(\fvx, \fvz)}{\log  \frac{ p(\fvx, \fvz, \yv) }{ q(\fvx, \fvz) } } \\
+              &amp;\geq \Exp{q(\fvx, \fvz)}{\log  \frac{ p(\yv \mid \fvx, \fvz) \cancel{p(\fvx \mid \fvz)} p(\fvz) }
+                                                   { \cancel{p(\fvx \mid \fvz)} q(\fvz) } } \\
+              &amp;\geq \Exp{p(\fvx \mid \fvz)q(\fvz)}{\log  \frac{ p(\yv \mid \fvx) p(\fvz) }
+                                                              { q(\fvz) } } \\
+              &amp;\geq \Exp{p(\fvx \mid \fvz)q(\fvz)}{\log p(\yv \mid \fvx) }
+                  + \Exp{p(\fvx \mid \fvz)q(\fvz)}{\log \frac{ p(\fvz) }{ q(\fvz) }} \\
+\end{align}</div>
+<p>
+where in the last line, we write <span class="math">\(p(\yv \mid \fvx, \fvz) = p(\yv \mid \fvx)\)</span>,
+since knowing the inducing points <span class="math">\(\fvz\)</span> in addition to <span class="math">\(\fvz\)</span> provide no extra
+information to the conditional distribution.  Then we rewrite the expected
+value as an integral, and define <span class="math">\(F(q, \zv)\)</span> as the variational lower bound, so
+<span class="math">\(F(q, \zv) \geq \log p(\yv)\)</span>.
+</p>
+<div class="math">\begin{align}
+  F(q, \zv) &amp;= \iint \left[ \log p(\yv \mid \fvx) + \log \frac{p(\fvz)}{q(\fvz)} \right] p(\fvx \mid \fvz)q(\fvz) d\fvx d\fvz \\
+            &amp;= \int \left[ \int \log(p(\yv \mid \fvx))p(\fvx \mid \fvz) d\fvx
+             + \int p(\fvx \mid \fvz) \log \frac{p(\fvz)}{q(\fvz)} d \fvx \right] q(\fvz) d\fvz \\
+            &amp;= \int \left[ \Exp{p(\fvx \mid \fvz)}{\log p(\yv \mid \fvx)}
+             + \int p(\fvx \mid \fvz) \log \frac{p(\fvz)}{q(\fvz)} d \fvx \right] q(\fvz) d\fvz \\
+            &amp;= \int \left[ \Exp{p(\fvx \mid \fvz)}{\log p(\yv \mid \fvx)}
+             + \log \frac{p(\fvz)}{q(\fvz)} \right] q(\fvz) d\fvz \\
+\end{align}</div>
+<p>
+It is possible to do the expectation inside the integrand analytically,
+<span class="math">\(\Exp{p(\fvx \mid \fvz)}{\log p(\yv \mid \fvx)}\)</span>.  Recall that <span class="math">\(p(\yv \mid
+\fvx)= \normal{\yv}{\fvx}{\sigma^2 \I}\)</span>.  We will compute this expectation as
+the next step,
+</p>
+<div class="math">\begin{equation}
+  \Exp{p(\fvx \mid \fvz)}{\log p(\yv \mid \fvx)} = \Exp{p(\fvx \mid \fvz)}{
+       -\frac{n}{2}\log(2\pi\sigma^2) - \frac{1}{2}(\yv - \fvx)^{T} (\sigma^2 \I)^{-1} (\yv - \fvx) } \,.
+\end{equation}</div>
+<p>
+The trick here, is to rewrite the quadratic term as a trace.  We use two trace identities.  The first is that
+a trace of a constant (when considered a <span class="math">\(1\times1\)</span> matrix) is equal to itself, <span class="math">\(\Tr{c} = c\)</span>.  The
+second allows us to reorder the matrices, <span class="math">\(\Tr{\mathbf{A}\mathbf{B}} = \Tr{\mathbf{B}\mathbf{A}}\)</span> for
+appropriately sized matrices.   Written as a trace, the quadratic term is,
+</p>
+<div class="math">\begin{align}
+  \Tr{(\yv - \fvx)^{T} (\sigma^2 \I)^{-1} (\yv - \fvx)} &amp;= \Tr{(\sigma^2 \I)^{-1}(\yv - \fvx)(\yv - \fvx)^{T}} \\
+                                                        &amp;= \frac{1}{\sigma^2}\Tr{(\yv - \fvx)(\yv - \fvx)^{T}} \\
+                                                        &amp;= \frac{1}{\sigma^2}\Tr{ \yv\yv^T - 2\yv\fvx + \fvx\fvx^{T}}
+\end{align}</div>
+<p>
+Plugging this part back into expectation, and distributing the expected value,
+</p>
+<div class="math">\begin{align}
+  \Exp{p(\fvx \mid \fvz)}{\log p(\yv \mid \fvx)} &amp;= \Exp{p(\fvx \mid \fvz)}{
+       -\frac{n}{2}\log(2\pi\sigma^2) - \frac{1}{2\sigma^2}\Tr{ \yv\yv^T - 2\yv\fvx + \fvx\fvx^{T}}} \\
+        &amp;= -\frac{n}{2}\log(2\pi\sigma^2) - \frac{1}{2\sigma^2}\Tr{\yv\yv^T - 2\yv \Exp{p(\fvx \mid \fvz)}{\fvx}^{T}
+                                                                    + \Exp{p(\fvx \mid \fvz)}{\fvx \fvx^T}} \,.
+\end{align}</div>
+<p>
+We know that the distribution <span class="math">\(p(\fvx \mid \fvz) = \normal{\fvx}{\Kxz\Kzzinv\fvz}{\Kxz\Kzzinv\Kzx}\)</span>.  To simplify
+the notation, we define <span class="math">\(\fvxzbar \equiv \Kxz\Kzzinv\fvz\)</span>, and <span class="math">\(\Qxx \equiv \Kxz\Kzzinv\Kzx\)</span>.  More generally, we define
+<span class="math">\(\mathbf{Q}_{aa} = \K_{ab}\K_{bb}^{-1}\K_{ba}\)</span>.  Using this notation, <span class="math">\(p(\fvx \mid \fvz) = \normal{\fvz}{\fvxzbar}{\Kxx - \Qxx}\)</span>.
+Immediately, we see that <span class="math">\(\Exp{p(\fvx \mid \fvz)}{\fvx} = \fvxzbar\)</span>.  Then, note that
+</p>
+<div class="math">\begin{align}
+  \Cov{\fvx\,, \fvx} &amp;= \Exp{}{(\fvx - \Exp{}{\fvx})(\fvx - \Exp{}{\fvx})^T}
+                      = \Exp{}{\fvx\fvx^T} - \Exp{}{\fvx}\Exp{}{\fvx^{T}} \\
+                     &amp;= \Exp{}{(\fvx - \fvxzbar)(\fvx - \fvxzbar)^T}
+                      = \Exp{}{\fvx\fvx^T} - \fvxzbar\fvxzbar^T \\
+\end{align}</div>
+<p>
+So, <span class="math">\(\Exp{}{\fvx\fvx^T} = \Kxx - \Qxx + \fvxzbar\fvxzbar^T\)</span>.  Now, we plug
+these results back in and we can simplify this expression considerably,
+</p>
+<div class="math">\begin{align}
+  \Exp{p(\fvx \mid \fvz)}{\log p(\yv \mid \fvx)}
+        &amp;= -\frac{n}{2}\log(2\pi\sigma^2) - \frac{1}{2\sigma^2}\Tr{\yv\yv^T - 2\yv \Exp{p(\fvx \mid \fvz)}{\fvx}^{T}
+                                                                    + \Exp{p(\fvx \mid \fvz)}{\fvx \fvx^T}} \\
+        &amp;= -\frac{n}{2}\log(2\pi\sigma^2) - \frac{1}{2\sigma^2}\Tr{\yv\yv^T - 2\yv \fvxzbar^T + \fvxzbar\fvxzbar^T + \Kxx - \Qxx } \\
+        &amp;= -\frac{n}{2}\log(2\pi\sigma^2) - \frac{1}{2\sigma^2}\Tr{\yv\yv^T - 2\yv \fvxzbar^T + \fvxzbar\fvxzbar^T}
+                                          - \frac{1}{2\sigma^2}\Tr{\Kxx - \Qxx } \\
+        &amp;= \log \normal{\yv}{\fvxzbar}{\sigma^2 \I} - \frac{1}{2\sigma^2}\Tr{\Kxx - \Qxx } \,.
+\end{align}</div>
+<p>
+Now that we have computed the expectation <span class="math">\(\Exp{p(\fvx \mid \fvz)}{\log p(\yv \mid \fvx)}\)</span>, we plug
+it back into our expression for the marginal likelihood lower bound and simplify further,
+</p>
+<div class="math">\begin{align}
+  F(q, \zv) &amp;= \int \left[ \Exp{p(\fvx \mid \fvz)}{\log p(\yv \mid \fvx)}
+             + \log \frac{p(\fvz)}{q(\fvz)} \right] q(\fvz) d\fvz \\
+            &amp;= \int \left[ \log \normal{\yv}{\fvxzbar}{\sigma^2 \I} - \frac{1}{2\sigma^2}\Tr{\Kxx - \Qxx }
+             + \log \frac{p(\fvz)}{q(\fvz)} \right] q(\fvz) d\fvz \\
+            &amp;= \int q(\fvz) \log\left(\frac{ \normal{\yv}{\fvxzbar}{\sigma^2 \I} p(\fvz)}{q(\fvz)}\right) d\fvz
+             - \frac{1}{2\sigma^2}\Tr{\Kxx - \Qxx } \,.
+\end{align}</div>
+<p>
+The term on the left is an information inequality.  Specifically, note that
+<span class="math">\(\KL{q}{p} = -\int q \log\frac{p}{q}\)</span>, which equals zero when <span class="math">\(q = p\)</span>.
+Therefore, <span class="math">\(F(q, \zv)\)</span> is optimal when <span class="math">\(q(\fvz) \propto
+\normal{\yv}{\fvxzbar}{\sigma^2\I}p(\fvz)\)</span>.  Taking this product and normalizing leads
+to the optimal,
+</p>
+<div class="math">\begin{equation}
+q^*(\fvz) = \normal{\fvz}{\frac{1}{\sigma^2}\Kzz\boldsymbol\Sigma^{-1}\Kzz\yv}{\Kzz\boldsymbol\Sigma^{-1}\Kzz} \,,
+\end{equation}</div>
+<p>
+where <span class="math">\(\boldsymbol\Sigma = \Kzz + \frac{1}{\sigma^2}\Kzx\Kxz\)</span>.  Plugging this
+in, and computing the integral over <span class="math">\(\fvz\)</span> analytically (the integrand is
+products of normals) yeilds the final result for the marginal likelihood lower
+bound,
+</p>
+<div class="math">\begin{equation}
+  \log p(\yv) \geq \log \normal{\yv}{\bzero}{\Qxx + \sigma^2 \I} - \frac{1}{2\sigma^2}\Tr{\Kxx - \Qxx } \,.
+\end{equation}</div>
+<p>
+This is identical to the standard Gaussian process marginal likelihood, except for the additional trace term.
+When the trace of <span class="math">\(\Kxx - \Qxx = 0\)</span>, then the two are equal, and the approximation over <span class="math">\(q(\fvz)\)</span> and the inducing
+point input locations is exact.</p>
+<p>Lastly, we must return to the original Gaussian process conditional, Eq.~\ref{eq:gpcond}, which motivated our approximation.
+The final series of steps is to plug in the optimal <span class="math">\(q^*(\fvz)\)</span> and simplify,
+</p>
+<div class="math">\begin{align}
+  \tilde{p}(\fvs \mid \yv)
+      &amp;= \iint p(\fvs \mid \fvx, \fvz) q(\fvx, \fvz) d\fvz d\fvx \\
+      &amp;= \iint p(\fvs \mid \fvx, \fvz) p(\fvx \mid \fvz) q^*(\fvz) d\fvz d\fvx \\
+      &amp;= \int p(\fvs \mid \fvz) q^*(\fvz) d\fvz \\
+      &amp;= \normal{\fvs}{\frac{1}{\sigma^2} \Ksz \boldsymbol\Sigma^{-1}\Kzx \yv}{\Kss - \Ksz\Kzzinv\Kzs
+         + \Ksz\Kzz\boldsymbol\Sigma^{-1}\Kzz\Kzs} \\
+      &amp;= \normal{\fvs}{\Qsz[\Qxx + \sigma^2\I]^{-1}\yv}{\Kss - \Qsx[\Qxx + \sigma^2 \I]^{-1}\Qxs} \,.
+\end{align}</div>
+<p>
+The matrix inversions in this final expression are done on <span class="math">\(m \times m\)</span> matrices, instead of <span class="math">\(n \times n\)</span>, where <span class="math">\(m &lt; n\)</span>.
+Overall, the VFE approximation has a computational cost of <span class="math">\(\mathcal{O}(nm^2)\)</span> and memory usage of <span class="math">\(\mathcal{O}(nm)\)</span>.  How
+exactly this is accomplished is via the Woodbury matrix lemma, which allows us to rewrite
+</p>
+<div class="math">\begin{equation}
+  (\sigma^2\I + \Qxx)^{-1} = (\sigma^2 \I)^{-1} - (\sigma^2 \I)^{-1} \Kxz (\Kzzinv + \Kzx (\sigma^2 \I)^{-1} \Kxz)^{-1} \Kzx (\sigma^2 \I)^{-1} \,.
+\end{equation}</div>
+<p>
+The inverse required is now <span class="math">\(\Kzzinv\)</span>, which is <span class="math">\(m \times m\)</span>.</p>
+<script type="text/javascript">if (!document.getElementById('mathjaxscript_pelican_#%@#$@#')) {
+    var align = "center",
+        indent = "0em",
+        linebreak = "false";
+
+    if (false) {
+        align = (screen.width < 768) ? "left" : align;
+        indent = (screen.width < 768) ? "0em" : indent;
+        linebreak = (screen.width < 768) ? 'true' : linebreak;
+    }
+
+    var mathjaxscript = document.createElement('script');
+    mathjaxscript.id = 'mathjaxscript_pelican_#%@#$@#';
+    mathjaxscript.type = 'text/javascript';
+    mathjaxscript.src = 'https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.0/MathJax.js?config=TeX-AMS-MML_HTMLorMML';
+    mathjaxscript[(window.opera ? "innerHTML" : "text")] =
+        "MathJax.Hub.Config({" +
+        "    config: ['MMLorHTML.js']," +
+        "    TeX: { extensions: ['AMSmath.js','AMSsymbols.js','noErrors.js','noUndefined.js'], equationNumbers: { autoNumber: 'AMS' } }," +
+        "    jax: ['input/TeX','input/MathML','output/HTML-CSS']," +
+        "    extensions: ['tex2jax.js','mml2jax.js','MathMenu.js','MathZoom.js']," +
+        "    displayAlign: '"+ align +"'," +
+        "    displayIndent: '"+ indent +"'," +
+        "    showMathMenu: true," +
+        "    messageStyle: 'normal'," +
+        "    tex2jax: { " +
+        "        inlineMath: [ ['\\\\(','\\\\)'] ], " +
+        "        displayMath: [ ['$$','$$'] ]," +
+        "        processEscapes: true," +
+        "        preview: 'TeX'," +
+        "    }, " +
+        "    'HTML-CSS': { " +
+        "        styles: { '.MathJax_Display, .MathJax .mo, .MathJax .mi, .MathJax .mn': {color: 'inherit ! important'} }," +
+        "        linebreaks: { automatic: "+ linebreak +", width: '90% container' }," +
+        "    }, " +
+        "}); " +
+        "if ('default' !== 'default') {" +
+            "MathJax.Hub.Register.StartupHook('HTML-CSS Jax Ready',function () {" +
+                "var VARIANT = MathJax.OutputJax['HTML-CSS'].FONTDATA.VARIANT;" +
+                "VARIANT['normal'].fonts.unshift('MathJax_default');" +
+                "VARIANT['bold'].fonts.unshift('MathJax_default-bold');" +
+                "VARIANT['italic'].fonts.unshift('MathJax_default-italic');" +
+                "VARIANT['-tex-mathit'].fonts.unshift('MathJax_default-italic');" +
+            "});" +
+            "MathJax.Hub.Register.StartupHook('SVG Jax Ready',function () {" +
+                "var VARIANT = MathJax.OutputJax.SVG.FONTDATA.VARIANT;" +
+                "VARIANT['normal'].fonts.unshift('MathJax_default');" +
+                "VARIANT['bold'].fonts.unshift('MathJax_default-bold');" +
+                "VARIANT['italic'].fonts.unshift('MathJax_default-italic');" +
+                "VARIANT['-tex-mathit'].fonts.unshift('MathJax_default-italic');" +
+            "});" +
+        "}";
+    (document.body || document.getElementsByTagName('head')[0]).appendChild(mathjaxscript);
+}
+</script>
+      </div>
+<!-- /.entry-content -->
+      <footer class="post-info text-muted">
+        <button type="button" class="btn btn-default">          
+          <a href="https://bwengals.github.io/category/posts.html"><div class="fa fa-lg fa-folder-open"></div> posts</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/math.html"><div class="fa fa-lg fa-tag"></div> math</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gp.html"><div class="fa fa-lg fa-tag"></div> gp</a>
+        </button>
+      </footer>
+      <!-- /.post-info -->
+    </section>
+    </div>
+    <footer class="footer">
+      <div class="container">
+        <p class="footer-text">&copy; <a href="https://bwengals.github.io">Bill Engels</a> powered by <a href="http://getpelican.com/">pelican</a></p>
+      </div>
+    </footer>
+    <script src="//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+    <script src="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script>
+  </body>
+</html>

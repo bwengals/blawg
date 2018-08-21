@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+  
+
+    <meta name="tags" content="gp" />
+    <meta name="tags" content="gsoc" />
+
+    <title>Gaussian processes models - posts</title>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <link href="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="//maxcdn.bootstrapcdn.com/font-awesome/4.2.0/css/font-awesome.min.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/style.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/notebooks.css" rel="stylesheet" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+  <body id="index" class="archive">
+    <!--[if lt IE 7]>
+        <p class="browsehappy">You are using an <strong>outdated</strong> browser. Please <a href="http://browsehappy.com/">upgrade your browser</a> to improve your experience.</p>
+    <![endif]-->
+    <nav class="navbar navbar-default" role="navigation">
+      <div class="container">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target=".navbar-collapse">
+          <span class="sr-only">Toggle navigation</span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          </button>
+          <a class="navbar-brand" href="https://bwengals.github.io">Bill Engels</a>
+        </div>
+        <div class="collapse navbar-collapse navbar-right">
+          <ul class="nav navbar-nav">
+            <li><a href="https://bwengals.github.io/tags.html">tags</a></li>
+          </ul>
+        </div>
+        <!-- /.navbar-collapse -->
+      </div>
+    </nav>
+    <div class="container">
+    <section id="content" class="body">
+      <header>
+        <h1 class="entry-title">
+          Gaussian processes models
+        </h1>
+        
+        <div class="text-muted">Thu 25 May 2017</div>
+      </header>
+<!-- .entry-content -->
+      <div class="article_content">
+        <p>A from-the-ground-up description of Bayesian gaussian process models.  </p>
+
+
+<p>Before looking for places to pick up computational speedups, it's important to look closely at the math.  Most descriptions of gaussian processes (at least that I've found) focus on the conjugate case, but here I want to focus more on the general case.</p>
+<h1>Gaussian Processes</h1>
+<p>In the general case, the GP model can be written as</p>
+<div class="math">$$
+\begin{align}
+\phi \sim \mathrm{Prior}&amp; \\
+\theta \sim \mathrm{Prior}&amp; \\
+f \sim \mathcal{GP}(\mu(\phi;\,x),\, K(\theta;\, x, x')) &amp; \\
+D \sim \mathrm{Likelihood}(f \mid \phi, \theta, x)
+\end{align}
+$$</div>
+<p>The first two lines are the priors on the hyperparameters of the mean and covariance functions.  The next line is the prior on <span class="math">\(f\)</span>, which is a gaussian process.  The last line is the likelihood of the observed data <span class="math">\(D\)</span> given the GP.  The key for the variables is:</p>
+<ul>
+<li><span class="math">\(f\)</span>: Realization of the GP</li>
+<li><span class="math">\(x\)</span>: Inputs, locations where the GP <span class="math">\(f\)</span> is realized</li>
+<li><span class="math">\(K(\theta; \, x, x')\)</span>: The covariance function of the gaussian process prior</li>
+<li><span class="math">\(\mu(\phi ; \, x)\)</span>: The mean function of the gaussian process prior</li>
+<li><span class="math">\(\theta\)</span>: Covariance function hyperparameters </li>
+<li><span class="math">\(\phi\)</span>: Mean function hyperparameters </li>
+<li><span class="math">\(\mathcal{GP}\)</span> The gaussian process prior, it represents a multivariate normal distribution with a mean and covariance</li>
+</ul>
+<p>There are two tasks that will need to be accomplished when using GP models,</p>
+<ol>
+<li>Infer the posterior distributions of <span class="math">\(\theta\)</span>, <span class="math">\(\phi\)</span> and <span class="math">\(f\)</span>. </li>
+<li>Obtain the predictive distribution for the GP at new locations, denoted <span class="math">\(x_*\)</span>.</li>
+</ol>
+<hr />
+<h2>Inferring the posterior distribution of the hyperparameters</h2>
+<p>After specifying the priors and fully defining the model, the first computational step is to infer the posterior distributions of the unknown hyperparameters, <span class="math">\(\phi\)</span> and <span class="math">\(\theta\)</span>, and the GP <span class="math">\(f\)</span>.  The joint posterior distribution of the hyperparameters <span class="math">\(\theta, \phi\)</span> and the gaussian process <span class="math">\(f\)</span> is</p>
+<div class="math">$$
+p(\phi\,, \theta\,, f \mid D) \propto p(D \mid \phi \,, \theta \,, f) p(f \mid \phi \,, \theta) p(\theta \,, \phi) \,.
+$$</div>
+<p>The GP is represented by the term <span class="math">\(p(f \mid \phi \,, \theta)\)</span>, and is a multivariate normal,</p>
+<div class="math">$$
+p(f \mid \phi \,, \theta) = \frac{1}{\sqrt{ | 2\pi K |} } \exp{( -\frac{1}{2} (\mu - f)^T K^{-1} (\mu - f) )} \,.
+$$</div>
+<p>To keep the notation simple, we neglect to denote the fact that the <span class="math">\(\mu\)</span> and <span class="math">\(f\)</span> vectors are functions of the hyperparameters <span class="math">\(\phi\)</span>, <span class="math">\(\theta\)</span> and of the input locations <span class="math">\(x\)</span>.  </p>
+<p>It's often the case in practice that the mean function is the zero vector, <span class="math">\(\mu = 0\)</span> (so there are no <span class="math">\(\phi\)</span> hyperparameters).  Often the data can be rescaled to have a mean of zero before building a GP model.  Often, a simple mean function, such as constant or linear does improves the model.  However, in more physical situations, the mean function may be something from theory.  Throughout the rest of this post, we include a mean function for generality.</p>
+<p>In order to evaluate the GP prior, we need to compute the determinant of <span class="math">\(K\)</span> and invert <span class="math">\(K\)</span>.  The standard way of doing this is via the Cholesky decomposition.  The Cholesky decomposition is a way to compute a "matrix square root", <span class="math">\(K = LL^T\)</span>.  The triangular <span class="math">\(L\)</span> can be used to both compute the determinant, and compute <span class="math">\((\mu - f) K^{-1}\)</span> indirectly via a solve.  Below is a code snippet evaluating the log-likelihood, including a timing comparison with SciPy's built in multivariate normal <code>logpdf</code> method, which uses the slower SVD decomposition under the hood to control small eigenvalues in the covariance matrix.</p>
+<div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="kn">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">scipy</span> <span class="kn">as</span> <span class="nn">sp</span>
+<span class="kn">import</span> <span class="nn">scipy.linalg</span>
+
+<span class="k">def</span> <span class="nf">mvn_logpdf</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">mu</span><span class="p">,</span> <span class="n">K</span><span class="p">):</span>
+    <span class="n">diff</span> <span class="o">=</span> <span class="n">f</span> <span class="o">-</span> <span class="n">mu</span>
+    <span class="n">L</span> <span class="o">=</span> <span class="n">sp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">cholesky</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">lower</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+    <span class="n">tmp</span> <span class="o">=</span> <span class="n">sp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">solve_triangular</span><span class="p">(</span><span class="n">L</span><span class="p">,</span> <span class="n">diff</span><span class="p">,</span> <span class="n">lower</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+    <span class="n">logdet</span> <span class="o">=</span> <span class="mf">2.0</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">L</span><span class="p">)))</span>    
+    <span class="n">loglike</span> <span class="o">=</span> <span class="o">-</span><span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">tmp</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">tmp</span><span class="p">)</span> <span class="o">+</span> <span class="n">logdet</span> <span class="o">+</span> <span class="n">f</span><span class="o">.</span><span class="n">size</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="mi">2</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">loglike</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">scipy.stats</span>
+
+<span class="n">n</span> <span class="o">=</span> <span class="mi">300</span>
+<span class="n">mu</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">n</span><span class="p">)</span>
+<span class="n">A</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">n</span><span class="p">,</span><span class="n">n</span><span class="p">)</span>
+<span class="n">K</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">A</span><span class="p">)</span> <span class="o">+</span> <span class="mf">1e-8</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="n">n</span><span class="p">)</span> <span class="c1"># make K positive definite</span>
+<span class="n">f</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">n</span><span class="p">)</span>
+
+<span class="k">print</span><span class="p">(</span><span class="s2">&quot;Using cholesky implementation&quot;</span><span class="p">)</span>
+<span class="o">%</span><span class="n">timeit</span> <span class="n">mvn_logpdf</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">mu</span><span class="p">,</span> <span class="n">K</span><span class="p">)</span>
+
+<span class="k">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Using scipy implementation (which uses the SVD)&quot;</span><span class="p">)</span>
+<span class="o">%</span><span class="n">timeit</span> <span class="n">sp</span><span class="o">.</span><span class="n">stats</span><span class="o">.</span><span class="n">multivariate_normal</span><span class="o">.</span><span class="n">logpdf</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">mean</span><span class="o">=</span><span class="n">mu</span><span class="p">,</span> <span class="n">cov</span><span class="o">=</span><span class="n">K</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>Using cholesky implementation
+The slowest run took 13.88 times longer than the fastest. This could mean that an intermediate result is being cached.
+1000 loops, best of 3: 1.56 ms per loop
+
+Using scipy implementation (which uses the SVD)
+100 loops, best of 3: 18.3 ms per loop
+</pre></div>
+
+
+<p>Notice the Cholesky implementation is about 20x faster (on my laptop).  However, the SciPy version will be more accurate and won't throw an error when the decomposition is numerically unstable and some eigenvalues in <span class="math">\(K\)</span> are close to zero.  </p>
+<hr />
+<h2>Conjugacy</h2>
+<p>An important special case for GPs is when the noise on the observed data <span class="math">\(D\)</span> is normally distributed.  The model in this case is,</p>
+<div class="math">$$
+\begin{align}
+\phi \sim \mathrm{Prior}&amp; \\
+\theta \sim \mathrm{Prior}&amp; \\
+f \sim \mathcal{GP}(\mu(\phi;\,x),\, K(\theta;\, x, x')) &amp; \\
+D_i \sim N(f_i, \sigma^2)
+\end{align}
+$$</div>
+<p>Note that there is no need for the noise to be white, or IID.  If the observed noise isn't white, we can modify the last line of the model to be <span class="math">\(D \sim N(f, K_{noise})\)</span>, where <span class="math">\(K_{noise}\)</span> is the covariance of the noise (which may also be from a covariance function with unknown hyperparameters) which would be multivariate normally distributed. </p>
+<p>Exploiting conjugacy in GPs can be viewed as a way of speeding up computation when the observed data follows a normal distribution.  The GP prior is conjugate to the likelihood, since they are both normal.  In the conjugate case, the GP <span class="math">\(f\)</span> can be integrated out, yielding the <em>marginal</em> likelihood,</p>
+<div class="math">$$
+\begin{align}
+\int p(\phi\,, \theta\,, f \mid D) df &amp;\propto \int p(D \mid \phi \,, \theta \,, f) p(f \mid \phi \,, \theta) p(\theta \,, \phi) df \\
+p(\phi\,, \theta \mid D)  &amp;\propto \int p(D \mid \phi \,, \theta \,, f) p(f \mid \phi \,, \theta) df \, p(\theta \,, \phi) \\
+\end{align}
+$$</div>
+<p>Using conjugacy, the remaining integral on the right hand side can be done analytically.  The solution is</p>
+<div class="math">$$
+\int p(D \mid \phi \,, \theta \,, f) p(f \mid \phi \,, \theta) df = p(D \mid \phi \,, \theta) = N(0, K + \sigma^2 I) \,.
+$$</div>
+<p>Since this is a multivariate normal distribution, we can use the same Cholesky based routine that was used above to compute the marginal likelihood, replacing <span class="math">\(K\)</span> with <span class="math">\(K + \sigma^2 I\)</span> (or <span class="math">\(K + K_{noise}\)</span>).  The big takeaway here is that we can get the posterior distribution of <span class="math">\(\phi\)</span> and <span class="math">\(\theta\)</span>, without having to get the <span class="math">\(n\)</span> dimensional posterior distribution of <span class="math">\(f\)</span>.  This is much easier and faster to do.  Also, we can use the same computational routine needed to evaluate the probability of the GP prior, to compute the infer the posterior distributions of <span class="math">\(\theta\)</span> and <span class="math">\(\phi\)</span>.</p>
+<h3>PyMC3 Example:</h3>
+<div class="highlight"><pre><span></span><span class="c1"># add pymc3 master to path</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="n">sys</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">insert</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;~/pymc3/&quot;</span><span class="p">)</span>
+
+<span class="kn">import</span> <span class="nn">pymc3</span> <span class="kn">as</span> <span class="nn">pm</span>
+<span class="kn">import</span> <span class="nn">theano.tensor</span> <span class="kn">as</span> <span class="nn">tt</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="kn">as</span> <span class="nn">plt</span>
+<span class="o">%</span><span class="n">matplotlib</span> <span class="n">inline</span>
+
+<span class="c1"># generate some data</span>
+<span class="n">n</span> <span class="o">=</span> <span class="mi">30</span>
+<span class="err">π</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
+<span class="n">D</span> <span class="o">=</span> <span class="mf">1.5</span> <span class="o">*</span> <span class="n">x</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="err">π</span> <span class="o">*</span> <span class="mi">3</span> <span class="o">*</span> <span class="n">x</span><span class="p">)</span> <span class="o">+</span> <span class="mf">0.15</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">n</span><span class="p">)</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">D</span><span class="p">,</span> <span class="s1">&#39;--o&#39;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="s2">&quot;Observed Data&quot;</span><span class="p">);</span> <span class="n">plt</span><span class="o">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s2">&quot;D&quot;</span><span class="p">);</span> <span class="n">plt</span><span class="o">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">);</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="p">[:,</span><span class="bp">None</span><span class="p">]</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/gp-speedups-1_files/gp-speedups-1_7_0.png" /></p>
+<div class="highlight"><pre><span></span><span class="c1"># define positive normal distribution with a lower bound</span>
+<span class="n">BoundedNormal</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Bound</span><span class="p">(</span><span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">,</span> <span class="n">lower</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="c1"># define gp model in pymc3</span>
+<span class="k">with</span> <span class="n">pm</span><span class="o">.</span><span class="n">Model</span><span class="p">()</span> <span class="k">as</span> <span class="n">conjugate_gp</span><span class="p">:</span>
+    <span class="err">σ</span><span class="n">sq_gp</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σsq_gp&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>  <span class="c1"># scales the covariance function</span>
+    <span class="err">ℓ</span> <span class="o">=</span> <span class="n">BoundedNormal</span><span class="p">(</span><span class="s2">&quot;ℓ&quot;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>      <span class="c1"># lengthscale of the covariance function (weakly informative)</span>
+
+    <span class="n">k</span> <span class="o">=</span> <span class="err">σ</span><span class="n">sq_gp</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Matern52</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="p">)</span> <span class="c1"># the covariance function</span>
+    <span class="n">K</span> <span class="o">=</span> <span class="n">k</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="c1"># evaluate the covariance function at the inputs</span>
+
+    <span class="n">c</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s2">&quot;c&quot;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>            <span class="c1"># prior for mean function y-intercept</span>
+    <span class="err">μ</span> <span class="o">=</span> <span class="n">c</span> <span class="o">*</span> <span class="n">tt</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">n</span><span class="p">)</span>                        <span class="c1"># constant mean function</span>
+
+    <span class="c1"># likelihood of the observed data</span>
+    <span class="err">σ</span><span class="n">sq_D</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σsq_D&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+    <span class="n">D_obs</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">MvNormal</span><span class="p">(</span><span class="s1">&#39;D_obs&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="err">μ</span><span class="p">,</span> <span class="n">cov</span><span class="o">=</span><span class="n">K</span> <span class="o">+</span> <span class="err">σ</span><span class="n">sq_D</span> <span class="o">*</span> <span class="n">tt</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="n">n</span><span class="p">),</span> <span class="n">observed</span><span class="o">=</span><span class="n">D</span><span class="p">)</span>
+
+<span class="c1"># draw samples</span>
+<span class="k">with</span> <span class="n">conjugate_gp</span><span class="p">:</span>
+    <span class="n">trace</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span><span class="mi">2000</span><span class="p">)</span>
+
+<span class="n">pm</span><span class="o">.</span><span class="n">traceplot</span><span class="p">(</span><span class="n">trace</span><span class="p">[</span><span class="mi">500</span><span class="p">:],</span> <span class="n">varnames</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ℓ&quot;</span><span class="p">,</span> <span class="s2">&quot;σsq_gp&quot;</span><span class="p">,</span> <span class="s2">&quot;σsq_D&quot;</span><span class="p">,</span> <span class="s2">&quot;c&quot;</span><span class="p">]);</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>Auto-assigning NUTS sampler...
+Initializing NUTS using ADVI...
+Average Loss = 39.983: 100%|██████████| 200000/200000 [06:07&lt;00:00, 544.52it/s]
+Finished [100%]: Average Loss = 39.987
+100%|█████████▉| 1999/2000 [02:25&lt;00:00, 17.62it/s]/home/bill/pymc3/pymc3/step_methods/hmc/nuts.py:237: UserWarning: Step size tuning was enabled throughout the whole trace. You might want to specify the number of tuning steps.
+  warnings.warn(&#39;Step size tuning was enabled throughout the whole &#39;
+/home/bill/anaconda3/lib/python3.5/site-packages/numpy/core/_methods.py:59: RuntimeWarning: Mean of empty slice.
+  warnings.warn(&quot;Mean of empty slice.&quot;, RuntimeWarning)
+100%|██████████| 2000/2000 [02:25&lt;00:00, 13.70it/s]
+</pre></div>
+
+
+<p><img alt="png" src="images/gp-speedups-1_files/gp-speedups-1_8_1.png" /></p>
+<hr />
+<h2>Non-Conjugacy</h2>
+<p>In the non-conjugate case, the integral</p>
+<div class="math">$$
+\int p(\phi\,, \theta\,, f \mid D) \, df \propto \int p(D \mid \phi \,, \theta \,, f) p(f \mid \phi \,, \theta) p(\theta \,, \phi) \, df 
+$$</div>
+<p>has no analytic solution.  MCMC or variational inference methods need to be used to estimate the posterior <span class="math">\(p(f \,, \phi \,, \theta \mid D)\)</span> directly.  This is very challenging! The GP <span class="math">\(f\)</span> is <span class="math">\(n\)</span> dimensional (where <span class="math">\(n\)</span> is the number of data points) and highly correlated, which are basically the two things that make sampling difficult.  And there is no guarantee it won't be multimodal, why not throw that in too.</p>
+<p>The GP library <a href="https://github.com/GPflow/GPflow">GPflow</a> uses a really nice reparameterization of the model that takes care of the 'highly correlated' issue.  This reparameterization is enabled by the ability to automatically propagate gradients through the Cholesky decomposition.  See <a href="http://gpflow.readthedocs.io/en/latest/notebooks/mcmc.html">here</a> for a full description.</p>
+<p>The model is reparameterized as</p>
+<div class="math">$$
+\begin{align}
+\phi \sim \mathrm{Prior}&amp; \\
+\theta \sim \mathrm{Prior}&amp; \\
+LL^T = \mathrm{cholesky}(K(\theta;\, x, x'))&amp; \\
+v \sim N(0, 1) &amp; \\
+f = \mu(\phi;\,x) + Lv &amp;  \\
+D \sim \mathrm{Likelihood}(f \mid \phi \,, \theta \,, x)&amp; \\
+\end{align}
+$$</div>
+<ul>
+<li>the cholesky is used in both the non-conjugate case and the conjugate case.  Here its explicit because its used in the reparameterization of the model.  this reparameterization is for the non-conjugate case. for the conjugate case you still need the cholesky to evaluate the multivariate normal log likelihood.</li>
+</ul>
+<p>where the new random variable is not <span class="math">\(f\)</span> anymore, but <span class="math">\(v\)</span>.  The posterior distribution of <span class="math">\(v\)</span> will be <strong>much</strong> less correlated than the posterior distribution of <span class="math">\(f\)</span>.</p>
+<h3>PyMC3 Example:</h3>
+<p>In this model the observed data is still normal, but we don't exploit conjugacy to infer the posterior of <span class="math">\(\theta\)</span>, <span class="math">\(\phi\)</span>, and (in this case) <span class="math">\(v\)</span>.</p>
+<div class="highlight"><pre><span></span><span class="c1"># define gp model in pymc3</span>
+<span class="k">with</span> <span class="n">pm</span><span class="o">.</span><span class="n">Model</span><span class="p">()</span> <span class="k">as</span> <span class="n">non_conjugate_gp</span><span class="p">:</span>
+    <span class="err">σ</span><span class="n">sq_gp</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σsq_gp&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>  <span class="c1"># scales the covariance function</span>
+    <span class="err">ℓ</span> <span class="o">=</span> <span class="n">BoundedNormal</span><span class="p">(</span><span class="s2">&quot;ℓ&quot;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>      <span class="c1"># lengthscale of the covariance function (weakly informative)</span>
+
+    <span class="n">k</span> <span class="o">=</span> <span class="err">σ</span><span class="n">sq_gp</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Matern52</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="p">)</span> <span class="c1"># the covariance function</span>
+    <span class="n">K</span> <span class="o">=</span> <span class="n">k</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="c1"># evaluate the covariance function at the inputs</span>
+
+    <span class="n">c</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s2">&quot;c&quot;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>            <span class="c1"># prior for mean function y-intercept</span>
+    <span class="err">μ</span> <span class="o">=</span> <span class="n">c</span> <span class="o">*</span> <span class="n">tt</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">n</span><span class="p">)</span>                        <span class="c1"># constant mean function</span>
+
+    <span class="c1"># Use GPflow&#39;s reparameterization</span>
+    <span class="n">L</span> <span class="o">=</span> <span class="n">tt</span><span class="o">.</span><span class="n">slinalg</span><span class="o">.</span><span class="n">cholesky</span><span class="p">(</span><span class="n">K</span> <span class="o">+</span> <span class="mf">1e-8</span> <span class="o">*</span> <span class="n">tt</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="n">n</span><span class="p">))</span>  <span class="c1"># ensure numerical stability</span>
+    <span class="n">v</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s2">&quot;v&quot;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="n">n</span><span class="p">,</span><span class="mi">1</span><span class="p">))</span> 
+    <span class="n">gp</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Deterministic</span><span class="p">(</span><span class="s2">&quot;gp&quot;</span><span class="p">,</span> <span class="n">tt</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">L</span><span class="p">,</span> <span class="n">v</span><span class="p">))</span>
+
+    <span class="c1"># likelihood of the observed data</span>
+    <span class="err">σ</span><span class="n">sq_D</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfCauchy</span><span class="p">(</span><span class="s2">&quot;σsq_D&quot;</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>    <span class="c1"># variance of the gaussian noise</span>
+    <span class="n">D_obs</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s1">&#39;D_obs&#39;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="n">gp</span> <span class="o">+</span> <span class="err">μ</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="n">tt</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="err">σ</span><span class="n">sq_D</span> <span class="o">+</span> <span class="mf">1e-8</span><span class="p">),</span> <span class="n">observed</span><span class="o">=</span><span class="n">D</span><span class="p">)</span>
+
+<span class="c1"># draw samples</span>
+<span class="k">with</span> <span class="n">non_conjugate_gp</span><span class="p">:</span>
+    <span class="n">trace</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span><span class="mi">2000</span><span class="p">)</span> 
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>Auto-assigning NUTS sampler...
+Initializing NUTS using ADVI...
+Average Loss = 1,043: 100%|██████████| 200000/200000 [04:15&lt;00:00, 781.65it/s]  
+Finished [100%]: Average Loss = 1,043
+100%|█████████▉| 1997/2000 [02:18&lt;00:00, 14.99it/s]/home/bill/pymc3/pymc3/step_methods/hmc/nuts.py:237: UserWarning: Step size tuning was enabled throughout the whole trace. You might want to specify the number of tuning steps.
+  warnings.warn(&#39;Step size tuning was enabled throughout the whole &#39;
+/home/bill/anaconda3/lib/python3.5/site-packages/numpy/core/_methods.py:59: RuntimeWarning: Mean of empty slice.
+  warnings.warn(&quot;Mean of empty slice.&quot;, RuntimeWarning)
+100%|██████████| 2000/2000 [02:18&lt;00:00, 14.45it/s]
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">pm</span><span class="o">.</span><span class="n">traceplot</span><span class="p">(</span><span class="n">trace</span><span class="p">[</span><span class="mi">500</span><span class="p">:],</span> <span class="n">varnames</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ℓ&quot;</span><span class="p">,</span> <span class="s2">&quot;σsq_gp&quot;</span><span class="p">,</span> <span class="s2">&quot;σsq_D&quot;</span><span class="p">,</span> <span class="s2">&quot;c&quot;</span><span class="p">,</span> <span class="s2">&quot;v&quot;</span><span class="p">]);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/gp-speedups-1_files/gp-speedups-1_11_0.png" /></p>
+<hr />
+<h2>Prediction</h2>
+<p>Similar calculations are involved in prediction.  The determinant isn't required anymore, but we still need to invert <span class="math">\(K(x, x')\)</span>.  As is pretty standard, the predictions of the GP at the inputs <span class="math">\(x_*\)</span> are denoted <span class="math">\(f_*\)</span>.<br />
+The predictive distribution is <span class="math">\(p(f_* \mid f\,, \phi \,, \theta)\)</span>.  </p>
+<p>If values of <span class="math">\(\theta\)</span> and <span class="math">\(\phi\)</span>, the covariance and mean function hyperparameters, are given, then <span class="math">\(K\)</span> and <span class="math">\(\mu\)</span> is given (for arbitrary input points <span class="math">\(x\)</span>).  The value of <span class="math">\(f\)</span> at the original inputs <span class="math">\(x\)</span> also needs to be given.  Conditional on these values, the predictive distribution of <span class="math">\(f_*\)</span> is gaussian.  The predicted value <span class="math">\(f_*\)</span> of the GP conditioned on a value of <span class="math">\(\theta\)</span> and a value of <span class="math">\(f\)</span> is</p>
+<div class="math">$$
+p(f_* \mid \phi\,, \theta\,, f) \sim N(\mu + K(x_*, x) K(x,x)^{-1} f, K(x_*, x_*) - K(x_*, x) K(x,x)^{-1} K(x, x_*))
+$$</div>
+<p>If the points we wish to predict at are the same ones as the given inputs <span class="math">\(x\)</span>, then
+<span class="math">\(f_* = f\)</span> and <span class="math">\(x_* = x\)</span>.  Then the above equation reduces to  </p>
+<div class="math">$$
+\begin{align}
+f_* \mid x_*, x, f &amp;\sim N(\mu + K(x_*, x) K(x,x)^{-1} f, K(x_*, x_*) - K(x_*, x) K(x,x)^{-1} K(x, x_*)) \\
+f \mid x, f &amp;\sim N(\mu + K(x, x) K(x, x)^{-1} f, K(x, x) - K(x, x) K(x, x)^{-1} K(x, x)) \\
+f &amp;\sim N(\mu + f, 0)
+\end{align}
+$$</div>
+<p>which is just the given value of <span class="math">\(f\)</span> (notice that the covariance is zero).  This is just for the GP though, instances of which may not be the observed data.  The observed data could follow any distribution, and the likelihood function of the data could be anything.  If we were predicting new data points <span class="math">\(D_*\)</span>, we would need to condition the likelihood function of the observed data on <span class="math">\(f_*\)</span>.</p>
+<p>The case where the GP <span class="math">\(f\)</span>, or a noisy version of it, <strong>is</strong> observed can exploit conjugacy.  The conditional distribution is similar, but the noise is incorporated,</p>
+<div class="math">$$
+p(f_* \mid \phi \,, \theta \,, f) \sim N(\mu + K(x_*, x) [K(x,x) + \sigma^2 I]^{-1} f \,, K(x_*, x_*) - K(x_*, x) [K(x,x) + \sigma^2 I]^{-1} K(x, x_*))
+$$</div>
+<h3>Computations in PyMC3</h3>
+<p>It is straightforward currently to do inference on GP the hyperparameters within PyMC3.  The tricky part is doing prediction.  The goal of some of my GSoC work this summer will be to make this just as straightfoward. 
+The main bottleneck in gaussian process computation is the inversion and determinant of <span class="math">\(K\)</span>.  A good way of computing these two quantities in general is with the Cholesky decomposition.  It's computational complexity is <span class="math">\(\mathcal{O}(n^3)\)</span>, where <span class="math">\(n\)</span> is the number of rows or columns of the matrix being decomposed (and so the number of data points).  </p>
+<h2>Next time ...</h2>
+<p>For PyMC3, Theano, which PyMC3 uses as a computation engine, also needs to be able to compute the gradient.  In the next post, I'll itemize some matrix structure exploiting options for speeding up GPs in PyMC3.</p>
+<hr />
+<script type="text/javascript">if (!document.getElementById('mathjaxscript_pelican_#%@#$@#')) {
+    var align = "center",
+        indent = "0em",
+        linebreak = "false";
+
+    if (false) {
+        align = (screen.width < 768) ? "left" : align;
+        indent = (screen.width < 768) ? "0em" : indent;
+        linebreak = (screen.width < 768) ? 'true' : linebreak;
+    }
+
+    var mathjaxscript = document.createElement('script');
+    mathjaxscript.id = 'mathjaxscript_pelican_#%@#$@#';
+    mathjaxscript.type = 'text/javascript';
+    mathjaxscript.src = 'https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.0/MathJax.js?config=TeX-AMS-MML_HTMLorMML';
+    mathjaxscript[(window.opera ? "innerHTML" : "text")] =
+        "MathJax.Hub.Config({" +
+        "    config: ['MMLorHTML.js']," +
+        "    TeX: { extensions: ['AMSmath.js','AMSsymbols.js','noErrors.js','noUndefined.js'], equationNumbers: { autoNumber: 'AMS' } }," +
+        "    jax: ['input/TeX','input/MathML','output/HTML-CSS']," +
+        "    extensions: ['tex2jax.js','mml2jax.js','MathMenu.js','MathZoom.js']," +
+        "    displayAlign: '"+ align +"'," +
+        "    displayIndent: '"+ indent +"'," +
+        "    showMathMenu: true," +
+        "    messageStyle: 'normal'," +
+        "    tex2jax: { " +
+        "        inlineMath: [ ['\\\\(','\\\\)'] ], " +
+        "        displayMath: [ ['$$','$$'] ]," +
+        "        processEscapes: true," +
+        "        preview: 'TeX'," +
+        "    }, " +
+        "    'HTML-CSS': { " +
+        "        styles: { '.MathJax_Display, .MathJax .mo, .MathJax .mi, .MathJax .mn': {color: 'inherit ! important'} }," +
+        "        linebreaks: { automatic: "+ linebreak +", width: '90% container' }," +
+        "    }, " +
+        "}); " +
+        "if ('default' !== 'default') {" +
+            "MathJax.Hub.Register.StartupHook('HTML-CSS Jax Ready',function () {" +
+                "var VARIANT = MathJax.OutputJax['HTML-CSS'].FONTDATA.VARIANT;" +
+                "VARIANT['normal'].fonts.unshift('MathJax_default');" +
+                "VARIANT['bold'].fonts.unshift('MathJax_default-bold');" +
+                "VARIANT['italic'].fonts.unshift('MathJax_default-italic');" +
+                "VARIANT['-tex-mathit'].fonts.unshift('MathJax_default-italic');" +
+            "});" +
+            "MathJax.Hub.Register.StartupHook('SVG Jax Ready',function () {" +
+                "var VARIANT = MathJax.OutputJax.SVG.FONTDATA.VARIANT;" +
+                "VARIANT['normal'].fonts.unshift('MathJax_default');" +
+                "VARIANT['bold'].fonts.unshift('MathJax_default-bold');" +
+                "VARIANT['italic'].fonts.unshift('MathJax_default-italic');" +
+                "VARIANT['-tex-mathit'].fonts.unshift('MathJax_default-italic');" +
+            "});" +
+        "}";
+    (document.body || document.getElementsByTagName('head')[0]).appendChild(mathjaxscript);
+}
+</script>
+      </div>
+<!-- /.entry-content -->
+      <footer class="post-info text-muted">
+        <button type="button" class="btn btn-default">          
+          <a href="https://bwengals.github.io/category/posts.html"><div class="fa fa-lg fa-folder-open"></div> posts</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gp.html"><div class="fa fa-lg fa-tag"></div> gp</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gsoc.html"><div class="fa fa-lg fa-tag"></div> gsoc</a>
+        </button>
+      </footer>
+      <!-- /.post-info -->
+    </section>
+    </div>
+    <footer class="footer">
+      <div class="container">
+        <p class="footer-text">&copy; <a href="https://bwengals.github.io">Bill Engels</a> powered by <a href="http://getpelican.com/">pelican</a></p>
+      </div>
+    </footer>
+    <script src="//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+    <script src="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script>
+  </body>
+</html>

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+  
+
+    <meta name="tags" content="gsoc" />
+
+    <title>Final Report GSOC 2018 - posts</title>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <link href="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="//maxcdn.bootstrapcdn.com/font-awesome/4.2.0/css/font-awesome.min.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/style.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/notebooks.css" rel="stylesheet" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+  <body id="index" class="archive">
+    <!--[if lt IE 7]>
+        <p class="browsehappy">You are using an <strong>outdated</strong> browser. Please <a href="http://browsehappy.com/">upgrade your browser</a> to improve your experience.</p>
+    <![endif]-->
+    <nav class="navbar navbar-default" role="navigation">
+      <div class="container">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target=".navbar-collapse">
+          <span class="sr-only">Toggle navigation</span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          </button>
+          <a class="navbar-brand" href="https://bwengals.github.io">Bill Engels</a>
+        </div>
+        <div class="collapse navbar-collapse navbar-right">
+          <ul class="nav navbar-nav">
+            <li><a href="https://bwengals.github.io/tags.html">tags</a></li>
+          </ul>
+        </div>
+        <!-- /.navbar-collapse -->
+      </div>
+    </nav>
+    <div class="container">
+    <section id="content" class="body">
+      <header>
+        <h1 class="entry-title">
+          Final Report GSOC 2018
+        </h1>
+        
+        <div class="text-muted">Mon 13 August 2018</div>
+      </header>
+<!-- .entry-content -->
+      <div class="article_content">
+        <p>Report of work done so far</p>
+<h1>GSOC 2018 Summary</h1>
+<p>This summer I focused primarily on improvements to the PyMC3 Gaussian process
+module.  These items include support for multiple observations, additional
+capabilities for larger data sets, a "Latent" Kronecker implementation, and
+additional supporting documentation and in-depth examples.</p>
+<p>Currently, the Latent Kronecker implementation is ready to merge pending a
+final review.  All tests are passing and the example runs smoothly.  The pull
+request is <a href="https://github.com/pymc-devs/pymc3/pull/3065">here</a>, with the demo
+<a href="https://github.com/pymc-devs/pymc3/blob/c04b94e1144707fb188bf3469a59330e01463580/docs/source/notebooks/GP-Kron.ipynb">here</a>.</p>
+<p>I added an <a href="https://github.com/pymc-devs/pymc3/pull/3057">in-depth tutorial on GP modeling by extending model of the textbook
+example "Mauna Loa" data set</a> to
+include ice core data.  This example describes some of the advanced modeling
+that can be done with PyMC3 and the GP library, such as custom mean and
+covariance functions, GPs with uncertain inputs and complex kernel design.  I
+incorporated feedback from a scientist who works in the area, with whom I
+connected by one of the core PyMC3 developers.  Some cosmetic tweaks are
+required before merge.</p>
+<p>The <a href="https://github.com/pymc-devs/pymc3/pull/3017">multiple observations
+functionality</a> proved more
+challenging.  The original design of the GP testing suite compared GP
+implementations to the base, un-approximated GP implementation in PyMC3.  Since
+all of the tests essentially depend on each other, adjusting the functionality
+of one implementation causes a large number, sometimes nearly all, of the tests
+to fail.  In order to solve this, <a href="https://github.com/pymc-devs/pymc3/pull/3118">I went through several iterations
+refactoring the GP testing suite</a>
+until I found an approach such that all tests both demonstrate correctness of
+the implementation, and are independent.  The downside is that the tests run 
+much slower.</p>
+<p>Another focus was on GP implementations for larger data sets.  Since doing
+further research, I've somewhat cooled on the idea of inducing-point based
+variational approximations.  The pros of these implementations are that
+(through minibatching the data) they can scale to data with millions of points
+and they require no special structure in the space of independent variables.
+However, they require the likelihood to be input to the GP constructor, which
+clashes with the flexibility that's fundamental to PyMC3.  If one needs to make
+such a specialized and "GP-only" model, they are likely better off using a GP
+only library that's devoted to such specializations.  Also, inducing-point
+models perform best on data sets where the underlying GP has longer relative
+lengthscales.  Data where shorter length variation are just as common, and here,
+inducing point methods often fall short.  </p>
+<p>I've prototyped a working implementation of a basic Latent inducing point model
+before GSOC started (Marginal is already finished).  This was picked up and 
+submitted as a PR by someone else, but may have been abandoned and is not yet 
+merged.  I intend to reach out and possibly complete it if the other person is
+not interested.  After seeing a Stan implementation, I have done some research
+into Nearest Neighbor Gaussian processes (NNGP), which may be a better fit for
+PyMC3.  It appears very effective for spatial modeling, far more so than
+inducing point based approximations.  Potential problems are that it requires
+the use of Theano's "scan" function, and adds a very large number of small
+covariance matrices to the computational graph, which may cause memory
+issues, negating it's ability to fulfill its purpose of handling large data sets.</p>
+<p>I also spent some time exploring PyMC4, which will have as similar a syntax as
+possible to PyMC3, but use a different backend for autodifferentiation.  Mostly
+for my own learning, and as an exercise in thinking about design, I made a
+working proof-of-concept using HIPS/autograd (the dynamic graph numpy backend).
+My goal is for the design to be completely uncoupled from the backend, such
+that it could be used with either static and dynamic graph backends.  In order
+to test this out, I intend to get this to also work with a static graph.</p>
+<h1>What remains</h1>
+<p>What I intent to finish in the next few weeks of unofficial "extra time"</p>
+<ul>
+<li>Finishing the test refactor</li>
+<li>Support for multiple observations</li>
+<li>Prototyping NNGP</li>
+<li>Cleaning up the Latent inducing point implementation and getting it merged</li>
+</ul>
+      </div>
+<!-- /.entry-content -->
+      <footer class="post-info text-muted">
+        <button type="button" class="btn btn-default">          
+          <a href="https://bwengals.github.io/category/posts.html"><div class="fa fa-lg fa-folder-open"></div> posts</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gsoc.html"><div class="fa fa-lg fa-tag"></div> gsoc</a>
+        </button>
+      </footer>
+      <!-- /.post-info -->
+    </section>
+    </div>
+    <footer class="footer">
+      <div class="container">
+        <p class="footer-text">&copy; <a href="https://bwengals.github.io">Bill Engels</a> powered by <a href="http://getpelican.com/">pelican</a></p>
+      </div>
+    </footer>
+    <script src="//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+    <script src="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script>
+  </body>
+</html>

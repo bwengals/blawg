@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+  
+
+    <meta name="tags" content="demo" />
+    <meta name="tags" content="gp" />
+    <meta name="tags" content="gsoc" />
+
+    <title>Mauna Loa Example 2: Incorporating atmospheric measurements - posts</title>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <link href="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="//maxcdn.bootstrapcdn.com/font-awesome/4.2.0/css/font-awesome.min.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/style.css" rel="stylesheet" />
+    <link href="https://bwengals.github.io/theme/notebooks.css" rel="stylesheet" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+  <body id="index" class="archive">
+    <!--[if lt IE 7]>
+        <p class="browsehappy">You are using an <strong>outdated</strong> browser. Please <a href="http://browsehappy.com/">upgrade your browser</a> to improve your experience.</p>
+    <![endif]-->
+    <nav class="navbar navbar-default" role="navigation">
+      <div class="container">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target=".navbar-collapse">
+          <span class="sr-only">Toggle navigation</span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          <span class="icon-bar"></span>
+          </button>
+          <a class="navbar-brand" href="https://bwengals.github.io">Bill Engels</a>
+        </div>
+        <div class="collapse navbar-collapse navbar-right">
+          <ul class="nav navbar-nav">
+            <li><a href="https://bwengals.github.io/tags.html">tags</a></li>
+          </ul>
+        </div>
+        <!-- /.navbar-collapse -->
+      </div>
+    </nav>
+    <div class="container">
+    <section id="content" class="body">
+      <header>
+        <h1 class="entry-title">
+          Mauna Loa Example 2: Incorporating atmospheric measurements
+        </h1>
+        
+        <div class="text-muted">Mon 09 July 2018</div>
+      </header>
+<!-- .entry-content -->
+      <div class="article_content">
+        <p>This GP example shows how to:</p>
+<ul>
+<li>Fit fully Bayesian GPs with NUTS</li>
+<li>Model inputs which are themselves uncertain (uncertainty in 'x')</li>
+<li>Defining custom mean and covariance functions</li>
+<li>Forecast and backcast</li>
+</ul>
+<h1>Example:  Mauna Loa CO<span class="math">\(_2\)</span> part 3</h1>
+<p>Now we look at how to build a changepoint covariance function, using covariance function primitives available in the PyMC3 library.  Finally, we'll put it all together to build an accurate GP model of CO2 emissions that combines ice core data with modern atmospheric measurements.  </p>
+<h2>Re-loading the ice core data</h2>
+<div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pymc3</span> <span class="kn">as</span> <span class="nn">pm</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="kn">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="kn">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">theano</span>
+<span class="kn">import</span> <span class="nn">theano.tensor</span> <span class="kn">as</span> <span class="nn">tt</span>
+
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="kn">as</span> <span class="nn">plt</span>
+<span class="o">%</span><span class="n">matplotlib</span> <span class="n">inline</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">ice</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">pm</span><span class="o">.</span><span class="n">get_data</span><span class="p">(</span><span class="s2">&quot;merged_ice_core_yearly.csv&quot;</span><span class="p">),</span> <span class="n">header</span><span class="o">=</span><span class="mi">26</span><span class="p">)</span>
+<span class="n">ice</span><span class="o">.</span><span class="n">columns</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;year&quot;</span><span class="p">,</span> <span class="s2">&quot;CO2&quot;</span><span class="p">]</span>
+<span class="n">ice</span><span class="p">[</span><span class="s2">&quot;CO2&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">ice</span><span class="p">[</span><span class="s2">&quot;CO2&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float</span><span class="p">)</span>
+
+<span class="c1">#### DATA AFTER 1958 is an average of ice core and mauna loa data, so remove it</span>
+<span class="n">ice</span> <span class="o">=</span> <span class="n">ice</span><span class="p">[</span><span class="n">ice</span><span class="p">[</span><span class="s2">&quot;year&quot;</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">1958</span><span class="p">]</span>
+<span class="k">print</span><span class="p">(</span><span class="s2">&quot;Number of data points:&quot;</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">ice</span><span class="p">))</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>Number of data points: 111
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">fig</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">9</span><span class="p">,</span><span class="mi">4</span><span class="p">))</span>
+<span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">gca</span><span class="p">()</span>
+
+<span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">ice</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">ice</span><span class="o">.</span><span class="n">CO2</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="s1">&#39;.k&#39;</span><span class="p">);</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">&quot;Year&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;CO2 (ppm)&quot;</span><span class="p">);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_4_0.png" /></p>
+<h1>A custom changepoint covariance function</h1>
+<p>More complex covariance functions can be constructed by composing base covariance
+functions in several ways.  For instance, two of the most commonly used operations are</p>
+<ul>
+<li>The sum of two covariance functions is a covariance function</li>
+<li>The product of two covariance functions is a covariance function</li>
+</ul>
+<p>We can also construct a covariance function by scaling a base covariance function (<span class="math">\(k_b\)</span>) by any arbitrary function,
+</p>
+<div class="math">$$ k(x, x) = s(x) k_{\mathrm{b}}(x, x') s(x') \,. $$</div>
+<p>
+The scaling function can be parameterized by known parameters, or unknown parameters can be inferred.</p>
+<h3>Heaviside step function</h3>
+<p>To specifically construct a covariance function that describes a changepoint, 
+we could propose a scaling function <span class="math">\(s(x)\)</span> that specifies the region where the base covariance is active.   The simplest option is the step function,</p>
+<div class="math">$$ s(x;\, x_0) = 
+\begin{cases} 
+   0 &amp; x \leq x_0 \\
+   1 &amp; x_0 &lt; x
+\end{cases} 
+$$</div>
+<p>which is parameterized by the changepoint <span class="math">\(x_0\)</span>.  The covariance function <span class="math">\(s(x; x_0) k_b(x, x') s(x'; x_0)\)</span> is only active in the region <span class="math">\(x \leq x_0\)</span>.  </p>
+<p>The PyMC3 contains the <code>ScaledCov</code> covariance function.  As arguments, it takes a base
+covariance, a scaling function, and the tuple of the arguments for the base covariance.  To construct this in PyMC3, we first define the scaling function:</p>
+<div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">step_function</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">x0</span><span class="p">,</span> <span class="n">greater</span><span class="o">=</span><span class="bp">True</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">greater</span><span class="p">:</span>
+        <span class="c1"># s = 1 for x &lt; x_0</span>
+        <span class="k">return</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">tt</span><span class="o">.</span><span class="n">sgn</span><span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">x0</span><span class="p">)</span> <span class="o">+</span> <span class="mf">1.0</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">tt</span><span class="o">.</span><span class="n">sgn</span><span class="p">(</span><span class="n">x0</span> <span class="o">-</span> <span class="n">x</span><span class="p">)</span> <span class="o">+</span> <span class="mf">1.0</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">step_function</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">10</span><span class="p">),</span> <span class="n">x0</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">greater</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>array([0., 0., 0., 0., 0., 1., 1., 1., 1., 1.])
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">step_function</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">10</span><span class="p">),</span> <span class="n">x0</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">greater</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>array([1., 1., 1., 1., 1., 0., 0., 0., 0., 0.])
+</pre></div>
+
+
+<p>Then we can define the the following covariance function.  We compute it over <span class="math">\(x \in (0, 100)\)</span>.  The base covariance has a lengthscale of 10, and <span class="math">\(x_0 = 40\)</span>.  Since we are using a step function, it is "active" for <span class="math">\(x &lt; 40\)</span>.</p>
+<div class="highlight"><pre><span></span><span class="n">cov</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ExpQuad</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
+<span class="n">sc_cov</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ScaledCov</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">cov</span><span class="p">,</span> <span class="n">step_function</span><span class="p">,</span> <span class="p">(</span><span class="mi">40</span><span class="p">,</span> <span class="bp">False</span><span class="p">))</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="mi">100</span><span class="p">)</span>
+<span class="n">K</span> <span class="o">=</span> <span class="n">sc_cov</span><span class="p">(</span><span class="n">x</span><span class="p">[:,</span><span class="bp">None</span><span class="p">])</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+<span class="n">m</span><span class="o">=</span><span class="n">plt</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s2">&quot;magma&quot;</span><span class="p">);</span> <span class="n">plt</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">m</span><span class="p">);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_12_0.png" /></p>
+<p>But his isn't a changepoint covariance function yet.  We can add two of these together.  For <span class="math">\(x &lt; 40\)</span>, Lets use a base covariance that is a <code>Matern32</code> with a lengthscale of 5 and an amplitude of 0.25.</p>
+<div class="highlight"><pre><span></span><span class="n">cov1</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ExpQuad</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
+<span class="n">sc_cov1</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ScaledCov</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">cov1</span><span class="p">,</span> <span class="n">step_function</span><span class="p">,</span> <span class="p">(</span><span class="mi">40</span><span class="p">,</span> <span class="bp">False</span><span class="p">))</span>
+
+<span class="n">cov2</span> <span class="o">=</span> <span class="mf">0.25</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Matern32</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<span class="n">sc_cov2</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ScaledCov</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">cov2</span><span class="p">,</span> <span class="n">step_function</span><span class="p">,</span> <span class="p">(</span><span class="mi">40</span><span class="p">,</span> <span class="bp">True</span><span class="p">))</span>
+
+<span class="n">sc_cov</span> <span class="o">=</span> <span class="n">sc_cov1</span> <span class="o">+</span> <span class="n">sc_cov2</span>
+
+<span class="c1"># plot over 0 &lt; x &lt; 100</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="mi">100</span><span class="p">)</span>
+<span class="n">K</span> <span class="o">=</span> <span class="n">sc_cov</span><span class="p">(</span><span class="n">x</span><span class="p">[:,</span><span class="bp">None</span><span class="p">])</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+<span class="n">m</span><span class="o">=</span><span class="n">plt</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s2">&quot;magma&quot;</span><span class="p">);</span> <span class="n">plt</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">m</span><span class="p">);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_14_0.png" /></p>
+<p>What do samples from the Gaussian process prior with this covariance look like?</p>
+<div class="highlight"><pre><span></span><span class="n">prior_samples</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">multivariate_normal</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span> <span class="n">K</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span><span class="o">.</span><span class="n">T</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">prior_samples</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">axvline</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;k&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_16_0.png" /></p>
+<p>Before <span class="math">\(x = 40\)</span>, the function is smooth and slowly changing.  After <span class="math">\(x = 40\)</span>, the samples are less smooth and change quickly.</p>
+<h3>A gradual change with a sigmoid function</h3>
+<p>Instead of a sharp cutoff, It is usually more realistic to have a smooth transition.  For this we can use the logistic function, shown below:</p>
+<div class="highlight"><pre><span></span><span class="c1"># a is the slope, b is the location</span>
+
+<span class="n">a</span> <span class="o">=</span> <span class="o">-</span><span class="mf">0.2</span>
+<span class="n">b</span> <span class="o">=</span> <span class="mi">40</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">pm</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">invlogit</span><span class="p">(</span><span class="n">a</span><span class="o">*</span><span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">b</span><span class="p">))</span><span class="o">.</span><span class="n">eval</span><span class="p">(),</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;scaling left cov&quot;</span><span class="p">);</span>
+
+<span class="n">a</span> <span class="o">=</span> <span class="mf">0.2</span>
+<span class="n">b</span> <span class="o">=</span> <span class="mi">40</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">pm</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">invlogit</span><span class="p">(</span><span class="n">a</span><span class="o">*</span><span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">b</span><span class="p">))</span><span class="o">.</span><span class="n">eval</span><span class="p">(),</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;scaling right cov&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">legend</span><span class="p">();</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_18_0.png" /></p>
+<div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">logistic</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">x0</span><span class="p">):</span>
+    <span class="c1"># a is the slope, x0 is the location</span>
+    <span class="k">return</span> <span class="n">pm</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">invlogit</span><span class="p">(</span><span class="n">a</span><span class="o">*</span><span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">x0</span><span class="p">))</span>
+</pre></div>
+
+
+<p>The same covariance function as before, but with a gradual changepoint is shown below.</p>
+<div class="highlight"><pre><span></span><span class="n">cov1</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ExpQuad</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
+<span class="n">sc_cov1</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ScaledCov</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">cov1</span><span class="p">,</span> <span class="n">logistic</span><span class="p">,</span> <span class="p">(</span><span class="o">-</span><span class="mf">0.1</span><span class="p">,</span> <span class="mi">40</span><span class="p">))</span>
+
+<span class="n">cov2</span> <span class="o">=</span> <span class="mf">0.25</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Matern32</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<span class="n">sc_cov2</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ScaledCov</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">cov2</span><span class="p">,</span> <span class="n">logistic</span><span class="p">,</span> <span class="p">(</span><span class="mf">0.1</span><span class="p">,</span> <span class="mi">40</span><span class="p">))</span>
+
+<span class="n">sc_cov</span> <span class="o">=</span> <span class="n">sc_cov1</span> <span class="o">+</span> <span class="n">sc_cov2</span>
+
+<span class="c1"># plot over 0 &lt; x &lt; 100</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="mi">100</span><span class="p">)</span>
+<span class="n">K</span> <span class="o">=</span> <span class="n">sc_cov</span><span class="p">(</span><span class="n">x</span><span class="p">[:,</span><span class="bp">None</span><span class="p">])</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+<span class="n">m</span><span class="o">=</span><span class="n">plt</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s2">&quot;magma&quot;</span><span class="p">);</span> <span class="n">plt</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">m</span><span class="p">);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_21_0.png" /></p>
+<p>Below, you can see that the transition of the prior functions from one region to the next is more gradual,</p>
+<div class="highlight"><pre><span></span><span class="n">prior_samples</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">multivariate_normal</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span> <span class="n">K</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span><span class="o">.</span><span class="n">T</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">prior_samples</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">axvline</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;k&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_23_0.png" /></p>
+<p>Lets try this model out instead of the semiparametric changepoint version.</p>
+<h3>Changepoint covariance model</h3>
+<p>The features of this model are:</p>
+<ul>
+<li>One covariance for short term variation across all time points</li>
+<li>The parameter <code>x0</code> is the location of the industrial revolution.  It is given a prior that has most of its support between years 1760 and 1840, centered at 1800.</li>
+<li>We can easily use the parameter as the <code>shift</code> parameter in the 2nd degree <code>Polynomial</code> (quadratic) covariance, and as the location of the changepoint in the changepoint covariance.</li>
+<li>A changepoint covariance that is <code>ExpQuad</code> prior to the industrial revolution, and <code>ExpQuad + Polynomial(degree=2)</code> afterwards.</li>
+<li>We use the same scaling and lengthscale parameters for each of the two base covariances in the changepoint covariance.</li>
+<li>Still modeling uncertainty in <code>x</code> as before</li>
+</ul>
+<div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">pm</span><span class="o">.</span><span class="n">Model</span><span class="p">()</span> <span class="k">as</span> <span class="n">model</span><span class="p">:</span>
+    <span class="err">η</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s2">&quot;η&quot;</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="err">ℓ</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;ℓ&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+
+    <span class="c1"># changepoint occurs near the year 1800, sometime between 1760, 1840</span>
+    <span class="n">x0</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s2">&quot;x0&quot;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mi">18</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+    <span class="c1"># the change happens gradually</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s2">&quot;a&quot;</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+    <span class="c1"># a constant for the </span>
+    <span class="n">c</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s2">&quot;c&quot;</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+    <span class="c1"># quadratic polynomial scale</span>
+    <span class="err">η</span><span class="n">q</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s2">&quot;ηq&quot;</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+
+    <span class="n">cov1</span> <span class="o">=</span> <span class="err">η</span><span class="o">**</span><span class="mi">2</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ExpQuad</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="p">)</span>
+    <span class="n">cov2</span> <span class="o">=</span> <span class="err">η</span><span class="o">**</span><span class="mi">2</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ExpQuad</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="p">)</span> <span class="o">+</span> <span class="err">η</span><span class="n">q</span><span class="o">**</span><span class="mi">2</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Polynomial</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">x0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span>
+
+    <span class="c1"># construct changepoint cov</span>
+    <span class="n">sc_cov1</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ScaledCov</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">cov1</span><span class="p">,</span> <span class="n">logistic</span><span class="p">,</span> <span class="p">(</span><span class="o">-</span><span class="n">a</span><span class="p">,</span> <span class="n">x0</span><span class="p">))</span>
+    <span class="n">sc_cov2</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ScaledCov</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">cov2</span><span class="p">,</span> <span class="n">logistic</span><span class="p">,</span> <span class="p">(</span> <span class="n">a</span><span class="p">,</span> <span class="n">x0</span><span class="p">))</span>
+    <span class="n">cov_c</span> <span class="o">=</span> <span class="n">sc_cov1</span> <span class="o">+</span> <span class="n">sc_cov2</span>
+
+    <span class="c1"># short term variation</span>
+    <span class="err">η</span><span class="n">s</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s2">&quot;ηs&quot;</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="err">ℓ</span><span class="n">s</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;ℓs&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">cov_s</span> <span class="o">=</span> <span class="err">η</span><span class="n">s</span><span class="o">**</span><span class="mi">2</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Matern52</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="n">s</span><span class="p">)</span>
+
+    <span class="n">gp</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">Marginal</span><span class="p">(</span><span class="n">cov_func</span><span class="o">=</span><span class="n">cov_s</span> <span class="o">+</span> <span class="n">cov_c</span><span class="p">)</span>
+
+    <span class="c1"># x location uncertainty (sd = 0.01 is a standard deviation of one year)</span>
+    <span class="n">t_diff</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s2">&quot;t_diff&quot;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mf">0.01</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">t</span><span class="p">))</span>
+    <span class="n">t_uncert</span> <span class="o">=</span> <span class="n">t_n</span> <span class="o">-</span> <span class="n">t_diff</span>
+
+    <span class="c1"># white noise variance</span>
+    <span class="err">σ</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s2">&quot;σ&quot;</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">testval</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">y_</span> <span class="o">=</span> <span class="n">gp</span><span class="o">.</span><span class="n">marginal_likelihood</span><span class="p">(</span><span class="s2">&quot;y&quot;</span><span class="p">,</span> <span class="n">X</span><span class="o">=</span><span class="n">t_uncert</span><span class="p">[:,</span><span class="bp">None</span><span class="p">],</span> <span class="n">y</span><span class="o">=</span><span class="n">y_n</span><span class="p">,</span> <span class="n">noise</span><span class="o">=</span><span class="err">σ</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">model</span><span class="p">:</span>
+    <span class="n">tr</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span><span class="mi">500</span><span class="p">,</span> <span class="n">chains</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">cores</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">nuts_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;target_accept&quot;</span><span class="p">:</span> <span class="mf">0.95</span><span class="p">})</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>Auto-assigning NUTS sampler...
+Initializing NUTS using jitter+adapt_diag...
+Sequential sampling (2 chains in 1 job)
+NUTS: [σ, t_diff, ℓs, ηs, ηq, c, a, x0, ℓ, η]
+100%|██████████| 1000/1000 [02:17&lt;00:00,  7.29it/s]
+100%|██████████| 1000/1000 [02:02&lt;00:00,  8.18it/s]
+The acceptance probability does not match the target. It is 0.8988327928717826, but should be close to 0.8. Try to increase the number of tuning steps.
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">pm</span><span class="o">.</span><span class="n">traceplot</span><span class="p">(</span><span class="n">tr</span><span class="p">,</span> <span class="n">varnames</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;η&quot;</span><span class="p">,</span> <span class="s2">&quot;ηs&quot;</span><span class="p">,</span> <span class="s2">&quot;ℓ&quot;</span><span class="p">,</span> <span class="s2">&quot;ℓs&quot;</span><span class="p">,</span> <span class="s2">&quot;c&quot;</span><span class="p">,</span> <span class="s2">&quot;a&quot;</span><span class="p">,</span> <span class="s2">&quot;x0&quot;</span><span class="p">,</span> <span class="s2">&quot;σ&quot;</span><span class="p">]);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_28_0.png" /></p>
+<h3>Predictions</h3>
+<div class="highlight"><pre><span></span><span class="n">tnew</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="mi">100</span><span class="p">,</span> <span class="mi">2300</span><span class="p">,</span> <span class="mi">2200</span><span class="p">)</span><span class="o">/</span><span class="mi">100</span>
+
+<span class="k">with</span> <span class="n">model</span><span class="p">:</span>
+    <span class="n">fnew</span> <span class="o">=</span> <span class="n">gp</span><span class="o">.</span><span class="n">conditional</span><span class="p">(</span><span class="s2">&quot;fnew&quot;</span><span class="p">,</span> <span class="n">Xnew</span><span class="o">=</span><span class="n">tnew</span><span class="p">[:,</span><span class="bp">None</span><span class="p">])</span>
+
+<span class="k">with</span> <span class="n">model</span><span class="p">:</span>
+    <span class="n">ppc</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">sample_ppc</span><span class="p">(</span><span class="n">tr</span><span class="p">,</span> <span class="n">samples</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="nb">vars</span><span class="o">=</span><span class="p">[</span><span class="n">fnew</span><span class="p">])</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>100%|██████████| 100/100 [17:02&lt;00:00, 10.23s/it]
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">samples</span> <span class="o">=</span> <span class="n">y_sd</span> <span class="o">*</span> <span class="n">ppc</span><span class="p">[</span><span class="s2">&quot;fnew&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">y_mu</span>
+
+<span class="n">fig</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span><span class="mi">5</span><span class="p">))</span>
+<span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">gca</span><span class="p">()</span>
+<span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">plot_gp_dist</span><span class="p">(</span><span class="n">ax</span><span class="p">,</span> <span class="n">samples</span><span class="p">,</span> <span class="n">tnew</span><span class="p">,</span> <span class="n">plot_samples</span><span class="o">=</span><span class="bp">True</span><span class="p">,</span> <span class="n">palette</span><span class="o">=</span><span class="s2">&quot;Blues&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">t</span><span class="o">/</span><span class="mi">100</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="s2">&quot;k.&quot;</span><span class="p">);</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">23</span><span class="p">));</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_xlim</span><span class="p">([</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">23</span><span class="p">]);</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_ylim</span><span class="p">([</span><span class="mi">250</span><span class="p">,</span> <span class="mi">450</span><span class="p">]);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_31_0.png" /></p>
+<p>The predictions for this model look much more realistic.  The product of a 2nd degree polynomial with an <code>ExpQuad</code> looks like a good model to forecast with.  It allows for
+the amount of CO2 to increase in a not-exactly-linear fashion.  We can see from the predictions that </p>
+<ul>
+<li>The amount of CO2 could increase at a faster rate</li>
+<li>The amount of CO2 should increase more or less linearly</li>
+<li>It is possible for the CO2 to start to decrease</li>
+</ul>
+<h2>Incorporating Atmospheric CO2 measurements</h2>
+<p>Next, we incorporate the CO2 measurements from the Mauna Loa observatory.  These data points were taken monthly from atmospheric levels.  Unlike the ice core data, there is no uncertainty in these measurements.  While modeling both of these data sets together, the value of including the uncertainty in the ice core measurement time will be more apparent.</p>
+<p>First let's load in the data, and then plot it alongside the ice core data.</p>
+<div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">datetime</span> <span class="kn">import</span> <span class="n">datetime</span> <span class="k">as</span> <span class="n">dt</span>
+<span class="kn">import</span> <span class="nn">time</span>
+
+<span class="k">def</span> <span class="nf">toYearFraction</span><span class="p">(</span><span class="n">date</span><span class="p">):</span>
+    <span class="n">date</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">date</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">sinceEpoch</span><span class="p">(</span><span class="n">date</span><span class="p">):</span> <span class="c1"># returns seconds since epoch</span>
+        <span class="k">return</span> <span class="n">time</span><span class="o">.</span><span class="n">mktime</span><span class="p">(</span><span class="n">date</span><span class="o">.</span><span class="n">timetuple</span><span class="p">())</span>
+    <span class="n">s</span> <span class="o">=</span> <span class="n">sinceEpoch</span>
+
+    <span class="n">year</span> <span class="o">=</span> <span class="n">date</span><span class="o">.</span><span class="n">year</span>
+    <span class="n">startOfThisYear</span> <span class="o">=</span> <span class="n">dt</span><span class="p">(</span><span class="n">year</span><span class="o">=</span><span class="n">year</span><span class="p">,</span> <span class="n">month</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">day</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">startOfNextYear</span> <span class="o">=</span> <span class="n">dt</span><span class="p">(</span><span class="n">year</span><span class="o">=</span><span class="n">year</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="n">month</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">day</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">yearElapsed</span> <span class="o">=</span> <span class="n">s</span><span class="p">(</span><span class="n">date</span><span class="p">)</span> <span class="o">-</span> <span class="n">s</span><span class="p">(</span><span class="n">startOfThisYear</span><span class="p">)</span>
+    <span class="n">yearDuration</span> <span class="o">=</span> <span class="n">s</span><span class="p">(</span><span class="n">startOfNextYear</span><span class="p">)</span> <span class="o">-</span> <span class="n">s</span><span class="p">(</span><span class="n">startOfThisYear</span><span class="p">)</span>
+    <span class="n">fraction</span> <span class="o">=</span> <span class="n">yearElapsed</span><span class="o">/</span><span class="n">yearDuration</span>
+
+    <span class="k">return</span> <span class="n">date</span><span class="o">.</span><span class="n">year</span> <span class="o">+</span> <span class="n">fraction</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">airdata</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">pm</span><span class="o">.</span><span class="n">get_data</span><span class="p">(</span><span class="s2">&quot;monthly_in_situ_co2_mlo.csv&quot;</span><span class="p">),</span> <span class="n">header</span><span class="o">=</span><span class="mi">56</span><span class="p">)</span>
+
+<span class="c1"># - replace -99.99 with NaN</span>
+<span class="n">airdata</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">to_replace</span><span class="o">=-</span><span class="mf">99.99</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+
+<span class="c1"># fix column names</span>
+<span class="n">cols</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;year&quot;</span><span class="p">,</span> <span class="s2">&quot;month&quot;</span><span class="p">,</span> <span class="s2">&quot;--&quot;</span><span class="p">,</span> <span class="s2">&quot;--&quot;</span><span class="p">,</span> <span class="s2">&quot;CO2&quot;</span><span class="p">,</span> <span class="s2">&quot;seasonaly_adjusted&quot;</span><span class="p">,</span> <span class="s2">&quot;fit&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;seasonally_adjusted_fit&quot;</span><span class="p">,</span> <span class="s2">&quot;CO2_filled&quot;</span><span class="p">,</span> <span class="s2">&quot;seasonally_adjusted_filled&quot;</span><span class="p">]</span>
+<span class="n">airdata</span><span class="o">.</span><span class="n">columns</span> <span class="o">=</span> <span class="n">cols</span>
+<span class="n">cols</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="s2">&quot;--&quot;</span><span class="p">);</span> <span class="n">cols</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="s2">&quot;--&quot;</span><span class="p">)</span>
+<span class="n">airdata</span> <span class="o">=</span> <span class="n">airdata</span><span class="p">[</span><span class="n">cols</span><span class="p">]</span>
+
+<span class="c1"># drop rows with nan</span>
+<span class="n">airdata</span><span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">inplace</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+
+<span class="c1"># fix time index</span>
+<span class="n">airdata</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">15</span>
+<span class="n">airdata</span><span class="o">.</span><span class="n">index</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">airdata</span><span class="p">[[</span><span class="s2">&quot;year&quot;</span><span class="p">,</span> <span class="s2">&quot;month&quot;</span><span class="p">,</span> <span class="s2">&quot;day&quot;</span><span class="p">]])</span>
+<span class="n">airdata</span><span class="p">[</span><span class="s2">&quot;year&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">toYearFraction</span><span class="p">(</span><span class="n">date</span><span class="p">)</span> <span class="k">for</span> <span class="n">date</span> <span class="ow">in</span> <span class="n">airdata</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">values</span><span class="p">]</span>
+<span class="n">cols</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="s2">&quot;month&quot;</span><span class="p">)</span>
+<span class="n">airdata</span> <span class="o">=</span> <span class="n">airdata</span><span class="p">[</span><span class="n">cols</span><span class="p">]</span>
+
+<span class="n">air</span> <span class="o">=</span> <span class="n">airdata</span><span class="p">[[</span><span class="s2">&quot;year&quot;</span><span class="p">,</span> <span class="s2">&quot;CO2&quot;</span><span class="p">]]</span>
+<span class="n">air</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+</pre></div>
+
+
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>year</th>
+      <th>CO2</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>1958-03-15</th>
+      <td>1958.200000</td>
+      <td>315.69</td>
+    </tr>
+    <tr>
+      <th>1958-04-15</th>
+      <td>1958.284932</td>
+      <td>317.46</td>
+    </tr>
+    <tr>
+      <th>1958-05-15</th>
+      <td>1958.367009</td>
+      <td>317.50</td>
+    </tr>
+    <tr>
+      <th>1958-07-15</th>
+      <td>1958.534132</td>
+      <td>315.86</td>
+    </tr>
+    <tr>
+      <th>1958-08-15</th>
+      <td>1958.619064</td>
+      <td>314.93</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p>Like was done in the first notebook, we reserve the data from 2004 onwards as the test set.</p>
+<div class="highlight"><pre><span></span><span class="n">sep_idx</span> <span class="o">=</span> <span class="n">air</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="s2">&quot;2003-12-15&quot;</span><span class="p">))</span>
+<span class="n">air_test</span> <span class="o">=</span> <span class="n">air</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">sep_idx</span><span class="p">:,</span> <span class="p">:]</span>
+<span class="n">air</span> <span class="o">=</span> <span class="n">air</span><span class="o">.</span><span class="n">iloc</span><span class="p">[:</span><span class="n">sep_idx</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="p">:]</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">air</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">air</span><span class="o">.</span><span class="n">CO2</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="s2">&quot;.b&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;atmospheric CO2&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">ice</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">ice</span><span class="o">.</span><span class="n">CO2</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;c&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;ice core CO2&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">legend</span><span class="p">();</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_38_0.png" /></p>
+<p>If we zoom in on the late 1950's, we can see that the atmospheric data has a seasonal component, while the ice core data does not.  </p>
+<div class="highlight"><pre><span></span><span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">air</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">air</span><span class="o">.</span><span class="n">CO2</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="s2">&quot;.b&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;atmospheric CO2&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">ice</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">ice</span><span class="o">.</span><span class="n">CO2</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;c&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;ice core CO2&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">xlim</span><span class="p">([</span><span class="mi">1949</span><span class="p">,</span> <span class="mi">1965</span><span class="p">]);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">ylim</span><span class="p">([</span><span class="mi">305</span><span class="p">,</span> <span class="mi">325</span><span class="p">]);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">legend</span><span class="p">();</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_40_0.png" /></p>
+<p>Since the ice core data isn't measured accurately, it wont be possible to backcast the seasonal component <em>unless we model uncertainty in x</em>.</p>
+<p>To model both the data together, we will combine the model we've built up using the ice core data, and combine it with elements from the previous notebook on the Mauna Loa data.  From the previous notebook we will additionally include the</p>
+<ul>
+<li>The <code>Perioidic</code>, seasonal component</li>
+<li>The <code>RatQuad</code> covariance for short range, annual scale variations</li>
+</ul>
+<p>Also, since we are using two different data sets, there should be two different <code>y</code>-direction uncertainties, one for the ice core data, and one for the atmospheric data.  Do accomplish this, we make a custom <code>WhiteNoise</code> covariance function that has two <code>σ</code> parameters. </p>
+<p>All custom covariance functions need to have the same three methods defined, <code>__init__</code>, <code>diag</code>, and <code>full</code>.  <code>full</code> returns the full covariance, given either <code>X</code> or <code>X</code> and a different <code>Xs</code>.  <code>diag</code> returns only the diagonal, and <code>__init__</code> saves the input parameters.</p>
+<div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">CustomWhiteNoise</span><span class="p">(</span><span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Covariance</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot; Custom White Noise covariance</span>
+<span class="sd">    - sigma1 is applied to the first n1 points in the data</span>
+<span class="sd">    - sigma2 is applied to the next n2 points in the data</span>
+
+<span class="sd">    The total number of data points n = n1 + n2</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">sigma1</span><span class="p">,</span> <span class="n">sigma2</span><span class="p">,</span> <span class="n">n1</span><span class="p">,</span> <span class="n">n2</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">CustomWhiteNoise</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="bp">None</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sigma1</span> <span class="o">=</span> <span class="n">sigma1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sigma2</span> <span class="o">=</span> <span class="n">sigma2</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n1</span> <span class="o">=</span> <span class="n">n1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n2</span> <span class="o">=</span> <span class="n">n2</span>
+
+    <span class="k">def</span> <span class="nf">diag</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">X</span><span class="p">):</span>
+        <span class="n">d1</span> <span class="o">=</span> <span class="n">tt</span><span class="o">.</span><span class="n">alloc</span><span class="p">(</span><span class="n">tt</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sigma1</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">n1</span><span class="p">)</span>
+        <span class="n">d2</span> <span class="o">=</span> <span class="n">tt</span><span class="o">.</span><span class="n">alloc</span><span class="p">(</span><span class="n">tt</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sigma2</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">n2</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">tt</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">d1</span><span class="p">,</span> <span class="n">d2</span><span class="p">),</span> <span class="mi">0</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">full</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">X</span><span class="p">,</span> <span class="n">Xs</span><span class="o">=</span><span class="bp">None</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">Xs</span> <span class="ow">is</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">tt</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">diag</span><span class="p">(</span><span class="n">X</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">tt</span><span class="o">.</span><span class="n">alloc</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">X</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">Xs</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+</pre></div>
+
+
+<p>Next we need to organize and combine the two data sets.  Remeber that the unit on the x-axis is centuries, not years.</p>
+<div class="highlight"><pre><span></span><span class="c1"># form dataset, stack t and co2 measurements</span>
+<span class="n">t</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">ice</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">air</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">values</span><span class="p">),</span> <span class="mi">0</span><span class="p">)</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">ice</span><span class="o">.</span><span class="n">CO2</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">air</span><span class="o">.</span><span class="n">CO2</span><span class="o">.</span><span class="n">values</span><span class="p">),</span> <span class="mi">0</span><span class="p">)</span>
+
+<span class="n">y_mu</span><span class="p">,</span> <span class="n">y_sd</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">ice</span><span class="o">.</span><span class="n">CO2</span><span class="o">.</span><span class="n">values</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="mi">50</span><span class="p">]),</span> <span class="n">np</span><span class="o">.</span><span class="n">std</span><span class="p">(</span><span class="n">y</span><span class="p">)</span>
+<span class="n">y_n</span> <span class="o">=</span> <span class="p">(</span><span class="n">y</span> <span class="o">-</span> <span class="n">y_mu</span><span class="p">)</span> <span class="o">/</span> <span class="n">y_sd</span>
+<span class="n">t_n</span> <span class="o">=</span> <span class="n">t</span> <span class="o">*</span> <span class="mf">0.01</span>
+</pre></div>
+
+
+<p>The specification of the model is below.  Since the data set is larger, we find the MAP estimate, instead of doing MCMC.  We also choose our priors for the hyperparameters more carefully.  For the changepoint covariance, we model the post-industrial revolution data with an <code>ExpQuad</code> covariance that has the same longer lengthscale as before the industrial revolution.  The idea is that whatever process was at work before, is still there after.  But then we add the product of a <code>Polynomial(degree=2)</code> and a <code>Matern52</code>.  We fix the lengthscale of the <code>Matern52</code> to two.  Since it has only been about two centuries since the industrial revolution, we force the Polynomial component to decay at that time scale.  This forces the uncertainty to rise at this time scale.</p>
+<div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">pm</span><span class="o">.</span><span class="n">Model</span><span class="p">()</span> <span class="k">as</span> <span class="n">model</span><span class="p">:</span>
+    <span class="err">η</span><span class="n">c</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;ηc&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+    <span class="err">ℓ</span><span class="n">c</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;ℓc&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="c1"># changepoint occurs near the year 1800, sometime between 1760, 1840</span>
+    <span class="n">x0</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s2">&quot;x0&quot;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mi">18</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+    <span class="c1"># the change happens gradually</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;a&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="c1"># constant offset</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s2">&quot;c&quot;</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+
+    <span class="c1"># quadratic polynomial scale</span>
+    <span class="err">η</span><span class="n">q</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s2">&quot;ηq&quot;</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="err">ℓ</span><span class="n">q</span> <span class="o">=</span> <span class="mf">2.0</span> <span class="c1"># 2 century impact, since we only have 2 C of post IR data </span>
+
+    <span class="n">cov1</span> <span class="o">=</span> <span class="err">η</span><span class="n">c</span><span class="o">**</span><span class="mi">2</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ExpQuad</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="n">c</span><span class="p">)</span>
+    <span class="n">cov2</span> <span class="o">=</span> <span class="err">η</span><span class="n">c</span><span class="o">**</span><span class="mi">2</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ExpQuad</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="n">c</span><span class="p">)</span> <span class="o">+</span> \
+           <span class="err">η</span><span class="n">q</span><span class="o">**</span><span class="mi">2</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Polynomial</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">x0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">c</span><span class="p">)</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Matern52</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="n">q</span><span class="p">)</span> <span class="c1"># ~2 century impact</span>
+
+    <span class="c1"># construct changepoint cov</span>
+    <span class="n">sc_cov1</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ScaledCov</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">cov1</span><span class="p">,</span> <span class="n">logistic</span><span class="p">,</span> <span class="p">(</span><span class="o">-</span><span class="n">a</span><span class="p">,</span> <span class="n">x0</span><span class="p">))</span>
+    <span class="n">sc_cov2</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ScaledCov</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">cov2</span><span class="p">,</span> <span class="n">logistic</span><span class="p">,</span> <span class="p">(</span> <span class="n">a</span><span class="p">,</span> <span class="n">x0</span><span class="p">))</span>
+    <span class="n">gp_c</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">Marginal</span><span class="p">(</span><span class="n">cov_func</span><span class="o">=</span><span class="n">sc_cov1</span> <span class="o">+</span> <span class="n">sc_cov2</span><span class="p">)</span>
+
+    <span class="c1"># short term variation</span>
+    <span class="err">η</span><span class="n">s</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s2">&quot;ηs&quot;</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+    <span class="err">ℓ</span><span class="n">s</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;ℓs&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
+    <span class="err">α</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;α&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">cov_s</span> <span class="o">=</span> <span class="err">η</span><span class="n">s</span><span class="o">**</span><span class="mi">2</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">RatQuad</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">α</span><span class="p">,</span> <span class="err">ℓ</span><span class="n">s</span><span class="p">)</span>
+    <span class="n">gp_s</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">Marginal</span><span class="p">(</span><span class="n">cov_func</span><span class="o">=</span><span class="n">cov_s</span><span class="p">)</span>
+
+    <span class="c1"># medium term variation</span>
+    <span class="err">η</span><span class="n">m</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s2">&quot;ηm&quot;</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="err">ℓ</span><span class="n">m</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;ℓm&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+    <span class="n">cov_m</span> <span class="o">=</span> <span class="err">η</span><span class="n">m</span><span class="o">**</span><span class="mi">2</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ExpQuad</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="n">m</span><span class="p">)</span>
+    <span class="n">gp_m</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">Marginal</span><span class="p">(</span><span class="n">cov_func</span><span class="o">=</span><span class="n">cov_m</span><span class="p">)</span>
+
+    <span class="c1">## periodic</span>
+    <span class="err">η</span><span class="n">p</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s2">&quot;ηp&quot;</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+    <span class="err">ℓ</span><span class="n">p_decay</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;ℓp_decay&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+    <span class="err">ℓ</span><span class="n">p_smooth</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s2">&quot;ℓp_smooth &quot;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mf">0.05</span><span class="p">)</span>
+    <span class="n">period</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">*</span> <span class="mf">0.01</span>  <span class="c1"># we know the period is annual</span>
+    <span class="n">cov_p</span> <span class="o">=</span> <span class="err">η</span><span class="n">p</span><span class="o">**</span><span class="mi">2</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Periodic</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">period</span><span class="p">,</span> <span class="err">ℓ</span><span class="n">p_smooth</span><span class="p">)</span> \
+                  <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">ExpQuad</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="n">p_decay</span><span class="p">)</span>
+    <span class="n">gp_p</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">Marginal</span><span class="p">(</span><span class="n">cov_func</span><span class="o">=</span><span class="n">cov_p</span><span class="p">)</span> 
+
+    <span class="n">gp</span> <span class="o">=</span> <span class="n">gp_c</span> <span class="o">+</span> <span class="n">gp_m</span> <span class="o">+</span> <span class="n">gp_s</span> <span class="o">+</span> <span class="n">gp_p</span>
+
+    <span class="c1"># - x location uncertainty (sd = 0.01 is a standard deviation of one year)</span>
+    <span class="c1"># - only the first 111 points are the ice core data</span>
+    <span class="c1"># - sd = 0.002 says the point may be the given data +- about half a year</span>
+    <span class="n">t_mu</span> <span class="o">=</span> <span class="n">t_n</span><span class="p">[:</span><span class="mi">111</span><span class="p">]</span>
+    <span class="n">t_diff</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Normal</span><span class="p">(</span><span class="s2">&quot;t_diff&quot;</span><span class="p">,</span> <span class="n">mu</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mf">0.002</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">t_mu</span><span class="p">))</span>
+    <span class="n">t_uncert</span> <span class="o">=</span> <span class="n">t_mu</span> <span class="o">-</span> <span class="n">t_diff</span>
+    <span class="n">t_combined</span> <span class="o">=</span> <span class="n">tt</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">t_uncert</span><span class="p">,</span> <span class="n">t_n</span><span class="p">[</span><span class="mi">111</span><span class="p">:]),</span> <span class="mi">0</span><span class="p">)</span>
+
+    <span class="c1"># Noise covariance, using boundary avoiding priors for MAP estimation</span>
+    <span class="err">σ</span><span class="mi">1</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;σ1&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">50</span><span class="p">)</span>
+    <span class="err">σ</span><span class="mi">2</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;σ2&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">50</span><span class="p">)</span>
+    <span class="err">η</span><span class="n">_noise</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">HalfNormal</span><span class="p">(</span><span class="s2">&quot;η_noise&quot;</span><span class="p">,</span> <span class="n">sd</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="err">ℓ</span><span class="n">_noise</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">Gamma</span><span class="p">(</span><span class="s2">&quot;ℓ_noise&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">beta</span><span class="o">=</span><span class="mi">200</span><span class="p">)</span>
+    <span class="n">cov_noise</span> <span class="o">=</span> <span class="err">η</span><span class="n">_noise</span><span class="o">**</span><span class="mi">2</span> <span class="o">*</span> <span class="n">pm</span><span class="o">.</span><span class="n">gp</span><span class="o">.</span><span class="n">cov</span><span class="o">.</span><span class="n">Matern32</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="err">ℓ</span><span class="n">_noise</span><span class="p">)</span> <span class="o">+</span>\
+                <span class="n">CustomWhiteNoise</span><span class="p">(</span><span class="err">σ</span><span class="mi">1</span><span class="p">,</span> <span class="err">σ</span><span class="mi">2</span><span class="p">,</span> <span class="mi">111</span><span class="p">,</span> <span class="mi">545</span><span class="p">)</span>
+
+
+    <span class="n">y_</span> <span class="o">=</span> <span class="n">gp</span><span class="o">.</span><span class="n">marginal_likelihood</span><span class="p">(</span><span class="s2">&quot;y&quot;</span><span class="p">,</span> <span class="n">X</span><span class="o">=</span><span class="n">t_combined</span><span class="p">[:,</span><span class="bp">None</span><span class="p">],</span> <span class="n">y</span><span class="o">=</span><span class="n">y_n</span><span class="p">,</span> <span class="n">noise</span><span class="o">=</span><span class="n">cov_noise</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="k">with</span> <span class="n">model</span><span class="p">:</span>
+    <span class="n">mp</span> <span class="o">=</span> <span class="n">pm</span><span class="o">.</span><span class="n">find_MAP</span><span class="p">(</span><span class="n">method</span><span class="o">=</span><span class="s2">&quot;BFGS&quot;</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span>logp = 2,447.7, ||grad|| = 2.2812: 100%|██████████| 398/398 [03:24&lt;00:00,  1.95it/s]
+</pre></div>
+
+
+<p>Lets look at the results.  First we'll look at the predictions out to the year 2050.</p>
+<div class="highlight"><pre><span></span><span class="n">tnew</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">1700</span><span class="p">,</span> <span class="mi">2040</span><span class="p">,</span> <span class="mi">3000</span><span class="p">)</span> <span class="o">*</span> <span class="mf">0.01</span>
+<span class="n">mu</span><span class="p">,</span> <span class="n">var</span> <span class="o">=</span> <span class="n">gp</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">tnew</span><span class="p">[:,</span><span class="bp">None</span><span class="p">],</span> <span class="n">point</span><span class="o">=</span><span class="n">mp</span><span class="p">,</span> <span class="n">diag</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="c1"># rescale</span>
+<span class="n">mu_s</span> <span class="o">=</span> <span class="n">y_sd</span> <span class="o">*</span> <span class="n">mu</span> <span class="o">+</span> <span class="n">y_mu</span>
+<span class="n">sd</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">var</span><span class="p">)</span><span class="o">*</span><span class="n">y_sd</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span><span class="mi">5</span><span class="p">))</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="s1">&#39;k.&#39;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;observed data&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">air_test</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">air_test</span><span class="o">.</span><span class="n">CO2</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;orange&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;test set data&quot;</span><span class="p">);</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="mi">100</span><span class="o">*</span><span class="n">tnew</span><span class="p">,</span> <span class="n">mu_s</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">fill_between</span><span class="p">(</span><span class="mi">100</span><span class="o">*</span><span class="n">tnew</span><span class="p">,</span> <span class="n">mu_s</span> <span class="o">-</span> <span class="mi">2</span><span class="o">*</span><span class="n">sd</span><span class="p">,</span> <span class="n">mu_s</span> <span class="o">+</span> <span class="mi">2</span><span class="o">*</span><span class="n">sd</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;2σ prediction interval&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">axhline</span><span class="p">(</span><span class="n">y</span><span class="o">=</span><span class="mi">400</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;k&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.7</span><span class="p">,</span> <span class="n">linestyle</span><span class="o">=</span><span class="s2">&quot;:&quot;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s2">&quot;CO2 [ppm]&quot;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s2">&quot;year&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="s2">&quot;Fit and forecast&quot;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">legend</span><span class="p">();</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">xlim</span><span class="p">([</span><span class="mi">1700</span><span class="p">,</span><span class="mi">2040</span><span class="p">]);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">ylim</span><span class="p">([</span><span class="mi">260</span><span class="p">,</span> <span class="mi">460</span><span class="p">]);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_52_0.png" /></p>
+<p>Lets zoom in for a closer look at the uncertainty intervals at the area around when the CO2 levels first cross 400 ppm.</p>
+<div class="highlight"><pre><span></span><span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span><span class="mi">5</span><span class="p">))</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="s1">&#39;k.&#39;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="mi">100</span><span class="o">*</span><span class="p">(</span><span class="n">t_n</span><span class="p">[:</span><span class="mi">111</span><span class="p">]</span> <span class="o">-</span> <span class="n">mp</span><span class="p">[</span><span class="s2">&quot;t_diff&quot;</span><span class="p">]),</span> <span class="n">y</span><span class="p">[:</span><span class="mi">111</span><span class="p">],</span> <span class="s2">&quot;.y&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">air_test</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">air_test</span><span class="o">.</span><span class="n">CO2</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;orange&quot;</span><span class="p">);</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="mi">100</span><span class="o">*</span><span class="n">tnew</span><span class="p">,</span> <span class="n">mu_s</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">fill_between</span><span class="p">(</span><span class="mi">100</span><span class="o">*</span><span class="n">tnew</span><span class="p">,</span> <span class="n">mu_s</span> <span class="o">-</span> <span class="mi">2</span><span class="o">*</span><span class="n">sd</span><span class="p">,</span> <span class="n">mu_s</span> <span class="o">+</span> <span class="mi">2</span><span class="o">*</span><span class="n">sd</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">axhline</span><span class="p">(</span><span class="n">y</span><span class="o">=</span><span class="mi">400</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;k&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.7</span><span class="p">,</span> <span class="n">linestyle</span><span class="o">=</span><span class="s2">&quot;:&quot;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s2">&quot;CO2 [ppm]&quot;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s2">&quot;year&quot;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="s2">&quot;Prediction at the test data&quot;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">xlim</span><span class="p">([</span><span class="mi">2005</span><span class="p">,</span><span class="mi">2025</span><span class="p">]);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">ylim</span><span class="p">([</span><span class="mi">370</span><span class="p">,</span> <span class="mi">430</span><span class="p">]);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_54_0.png" /></p>
+<p>If you compare this to the first Mauna Loa example notebook, the predictions are much better.  The date when the CO2 level first hits 400 is predicted more accurately.  This improvement in the bias is due to including the <code>Polynomial * Matern52</code> term.  </p>
+<p>We can also look at what the model says about CO2 levels back in time.  Since we allowed the <code>x</code> measurements to have uncertainty, we are able to fit the seasonal component back in time.  Lets look at the fit of the model </p>
+<div class="highlight"><pre><span></span><span class="n">tnew</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">11</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">500</span><span class="p">)</span> <span class="o">*</span> <span class="mf">0.01</span>
+<span class="n">mu</span><span class="p">,</span> <span class="n">var</span> <span class="o">=</span> <span class="n">gp</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">tnew</span><span class="p">[:,</span><span class="bp">None</span><span class="p">],</span> <span class="n">point</span><span class="o">=</span><span class="n">mp</span><span class="p">,</span> <span class="n">diag</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="c1"># rescale</span>
+<span class="n">mu_s</span> <span class="o">=</span> <span class="n">y_sd</span> <span class="o">*</span> <span class="n">mu</span> <span class="o">+</span> <span class="n">y_mu</span>
+<span class="n">sd</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">var</span><span class="p">)</span><span class="o">*</span><span class="n">y_sd</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span><span class="mi">5</span><span class="p">))</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="mi">100</span><span class="o">*</span><span class="p">(</span><span class="n">t_n</span><span class="p">[:</span><span class="mi">111</span><span class="p">]</span> <span class="o">-</span> <span class="n">mp</span><span class="p">[</span><span class="s2">&quot;t_diff&quot;</span><span class="p">]),</span> <span class="n">y</span><span class="p">[:</span><span class="mi">111</span><span class="p">],</span> <span class="s2">&quot;oy&quot;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;shifted observations&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="s1">&#39;k.&#39;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;observed data&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">air_test</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">air_test</span><span class="o">.</span><span class="n">CO2</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;orange&quot;</span><span class="p">);</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="mi">100</span><span class="o">*</span><span class="n">tnew</span><span class="p">,</span> <span class="n">mu_s</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">fill_between</span><span class="p">(</span><span class="mi">100</span><span class="o">*</span><span class="n">tnew</span><span class="p">,</span> <span class="n">mu_s</span> <span class="o">-</span> <span class="mi">2</span><span class="o">*</span><span class="n">sd</span><span class="p">,</span> <span class="n">mu_s</span> <span class="o">+</span> <span class="mi">2</span><span class="o">*</span><span class="n">sd</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;2σ uncertainty&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">loc</span><span class="o">=</span><span class="s2">&quot;upper center&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s2">&quot;CO2 [ppm]&quot;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s2">&quot;year&quot;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">xlim</span><span class="p">([</span><span class="mi">12</span><span class="p">,</span> <span class="mi">31</span><span class="p">]);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">xticks</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span><span class="mi">32</span><span class="p">));</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">ylim</span><span class="p">([</span><span class="mi">272</span><span class="p">,</span> <span class="mi">283</span><span class="p">]);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_58_0.png" /></p>
+<p>We can see that far back in time, we can backcast even the seasonal behavior.  The ~half year of uncertainty in the <code>x</code> locations allows them to be slightly shifted onto the nearest part of the seasonal oscillation for that year.  The magnitude of the oscillation is the same as it is now.</p>
+<div class="highlight"><pre><span></span><span class="n">tnew</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="mi">20</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">300</span><span class="p">)</span> <span class="o">*</span> <span class="mf">0.01</span>
+<span class="n">mu</span><span class="p">,</span> <span class="n">var</span> <span class="o">=</span> <span class="n">gp</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">tnew</span><span class="p">[:,</span><span class="bp">None</span><span class="p">],</span> <span class="n">point</span><span class="o">=</span><span class="n">mp</span><span class="p">,</span> <span class="n">diag</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="c1"># rescale</span>
+<span class="n">mu_s</span> <span class="o">=</span> <span class="n">y_sd</span> <span class="o">*</span> <span class="n">mu</span> <span class="o">+</span> <span class="n">y_mu</span>
+<span class="n">sd</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">var</span><span class="p">)</span><span class="o">*</span><span class="n">y_sd</span>
+</pre></div>
+
+
+<div class="highlight"><pre><span></span><span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span><span class="mi">5</span><span class="p">))</span>
+
+<span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="mi">100</span><span class="o">*</span><span class="n">tnew</span><span class="p">,</span> <span class="n">mu_s</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">fill_between</span><span class="p">(</span><span class="mi">100</span><span class="o">*</span><span class="n">tnew</span><span class="p">,</span> <span class="n">mu_s</span> <span class="o">-</span> <span class="mi">2</span><span class="o">*</span><span class="n">sd</span><span class="p">,</span> <span class="n">mu_s</span> <span class="o">+</span> <span class="mi">2</span><span class="o">*</span><span class="n">sd</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;2σ uncertainty&quot;</span><span class="p">);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">legend</span><span class="p">();</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s2">&quot;CO2 [ppm]&quot;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s2">&quot;year&quot;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">xlim</span><span class="p">([</span><span class="o">-</span><span class="mi">20</span><span class="p">,</span> <span class="mi">0</span><span class="p">]);</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">ylim</span><span class="p">([</span><span class="mi">272</span><span class="p">,</span> <span class="mi">283</span><span class="p">]);</span>
+</pre></div>
+
+
+<p><img alt="png" src="images/GPML3_files/GPML3_62_0.png" /></p>
+<p>As we go back before the year zero BCE, the backcasted seasonality remains intact, as one would expect.</p>
+<script type="text/javascript">if (!document.getElementById('mathjaxscript_pelican_#%@#$@#')) {
+    var align = "center",
+        indent = "0em",
+        linebreak = "false";
+
+    if (false) {
+        align = (screen.width < 768) ? "left" : align;
+        indent = (screen.width < 768) ? "0em" : indent;
+        linebreak = (screen.width < 768) ? 'true' : linebreak;
+    }
+
+    var mathjaxscript = document.createElement('script');
+    mathjaxscript.id = 'mathjaxscript_pelican_#%@#$@#';
+    mathjaxscript.type = 'text/javascript';
+    mathjaxscript.src = 'https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.0/MathJax.js?config=TeX-AMS-MML_HTMLorMML';
+    mathjaxscript[(window.opera ? "innerHTML" : "text")] =
+        "MathJax.Hub.Config({" +
+        "    config: ['MMLorHTML.js']," +
+        "    TeX: { extensions: ['AMSmath.js','AMSsymbols.js','noErrors.js','noUndefined.js'], equationNumbers: { autoNumber: 'AMS' } }," +
+        "    jax: ['input/TeX','input/MathML','output/HTML-CSS']," +
+        "    extensions: ['tex2jax.js','mml2jax.js','MathMenu.js','MathZoom.js']," +
+        "    displayAlign: '"+ align +"'," +
+        "    displayIndent: '"+ indent +"'," +
+        "    showMathMenu: true," +
+        "    messageStyle: 'normal'," +
+        "    tex2jax: { " +
+        "        inlineMath: [ ['\\\\(','\\\\)'] ], " +
+        "        displayMath: [ ['$$','$$'] ]," +
+        "        processEscapes: true," +
+        "        preview: 'TeX'," +
+        "    }, " +
+        "    'HTML-CSS': { " +
+        "        styles: { '.MathJax_Display, .MathJax .mo, .MathJax .mi, .MathJax .mn': {color: 'inherit ! important'} }," +
+        "        linebreaks: { automatic: "+ linebreak +", width: '90% container' }," +
+        "    }, " +
+        "}); " +
+        "if ('default' !== 'default') {" +
+            "MathJax.Hub.Register.StartupHook('HTML-CSS Jax Ready',function () {" +
+                "var VARIANT = MathJax.OutputJax['HTML-CSS'].FONTDATA.VARIANT;" +
+                "VARIANT['normal'].fonts.unshift('MathJax_default');" +
+                "VARIANT['bold'].fonts.unshift('MathJax_default-bold');" +
+                "VARIANT['italic'].fonts.unshift('MathJax_default-italic');" +
+                "VARIANT['-tex-mathit'].fonts.unshift('MathJax_default-italic');" +
+            "});" +
+            "MathJax.Hub.Register.StartupHook('SVG Jax Ready',function () {" +
+                "var VARIANT = MathJax.OutputJax.SVG.FONTDATA.VARIANT;" +
+                "VARIANT['normal'].fonts.unshift('MathJax_default');" +
+                "VARIANT['bold'].fonts.unshift('MathJax_default-bold');" +
+                "VARIANT['italic'].fonts.unshift('MathJax_default-italic');" +
+                "VARIANT['-tex-mathit'].fonts.unshift('MathJax_default-italic');" +
+            "});" +
+        "}";
+    (document.body || document.getElementsByTagName('head')[0]).appendChild(mathjaxscript);
+}
+</script>
+      </div>
+<!-- /.entry-content -->
+      <footer class="post-info text-muted">
+        <button type="button" class="btn btn-default">          
+          <a href="https://bwengals.github.io/category/posts.html"><div class="fa fa-lg fa-folder-open"></div> posts</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/demo.html"><div class="fa fa-lg fa-tag"></div> demo</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gp.html"><div class="fa fa-lg fa-tag"></div> gp</a>
+        </button>
+        <button type="button" class="btn btn-default">
+          <a href="https://bwengals.github.io/tag/gsoc.html"><div class="fa fa-lg fa-tag"></div> gsoc</a>
+        </button>
+      </footer>
+      <!-- /.post-info -->
+    </section>
+    </div>
+    <footer class="footer">
+      <div class="container">
+        <p class="footer-text">&copy; <a href="https://bwengals.github.io">Bill Engels</a> powered by <a href="http://getpelican.com/">pelican</a></p>
+      </div>
+    </footer>
+    <script src="//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+    <script src="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script>
+  </body>
+</html>
